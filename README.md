@@ -48,7 +48,7 @@
 | `drivers/*` | Userspace-драйверы: NVMe, AHCI, xHCI, DRM-графика, NIC |
 | `mlibc` | libc (внешний репозиторий Managarm) |
 
-Подробный разбор кодовой базы — [docs/ANALYSIS.md](docs/ANALYSIS.md).
+Подробный разбор кодовой базы — [meta/ANALYSIS.md](meta/ANALYSIS.md).
 
 ## Дорожная карта
 
@@ -59,15 +59,16 @@
 - **Этап 4** — экосистема: пакетная база, GPU-ускорение, Wi-Fi
 - **Этап 5** — дифференциация: namespaces/cgroups, io_uring-подобный нативный API
 
-Детали: [docs/ROADMAP.md](docs/ROADMAP.md), идеи и обоснования: [docs/IDEAS.md](docs/IDEAS.md).
+Детали: [meta/ROADMAP.md](meta/ROADMAP.md), идеи и обоснования: [meta/IDEAS.md](meta/IDEAS.md).
 
 ## Документация
 
 | Документ | Содержание |
 |---|---|
-| [docs/ANALYSIS.md](docs/ANALYSIS.md) | Глубокий анализ исходной кодовой базы Managarm |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Дорожная карта проекта по этапам |
-| [docs/IDEAS.md](docs/IDEAS.md) | Идеи улучшений с приоритетами |
+| [meta/ANALYSIS.md](meta/ANALYSIS.md) | Глубокий анализ исходной кодовой базы Managarm |
+| [meta/ROADMAP.md](meta/ROADMAP.md) | Дорожная карта проекта по этапам |
+| [meta/IDEAS.md](meta/IDEAS.md) | Идеи улучшений с приоритетами |
+| [meta/UPSTREAM.md](meta/UPSTREAM.md) | Политика работы с upstream-снапшотом Managarm |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Стиль кода и правила участия |
 
 ## Статус

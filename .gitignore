@@ -13,13 +13,13 @@ ramfs/
 
 # Meson
 .meson/
-subprojects/packagecache/
-subprojects/*/build/
+subprojects/*
+!subprojects/*.wrap
 
 # Cargo / Rust
 target/
 **/*.rs.bk
-Cargo.lock.orig
+Cargo.lock
 
 # Компиляция
 *.o
@@ -31,9 +31,14 @@ Cargo.lock.orig
 # IDE / редакторы
 .vscode/
 .idea/
+.clangd
+compile_commands.json
 *.swp
 *~
 .DS_Store
+
+# xbstrap
+*.xbstrap
 
 # Секреты и локальные скрипты
 .secrets/
