@@ -1,0 +1,41 @@
+# Сборка (meson / xbstrap / cbuildrt)
+build/
+build-*/
+install/
+packages/
+bootstrap-site/
+*.img
+*.vdi
+*.qcow2
+initrd/
+initrd.cpio
+ramfs/
+
+# Meson
+.meson/
+subprojects/packagecache/
+subprojects/*/build/
+
+# Cargo / Rust
+target/
+**/*.rs.bk
+Cargo.lock.orig
+
+# Компиляция
+*.o
+*.a
+*.so
+*.bin.debug
+*.d
+
+# IDE / редакторы
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Секреты и локальные скрипты
+.secrets/
+*.token
+.env
