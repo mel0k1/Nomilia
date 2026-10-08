@@ -111,8 +111,9 @@ jobs:
                 # Never cache the packages that Nomilia builds from source.
                 rm -f xbps-repo/managarm-[0-9]*.xbps xbps-repo/managarm-kernel*.xbps xbps-repo/managarm-system*.xbps
                 # Build mlibc from the Nomilia fork instead of caching upstream prebuilts.
-                rm -f xbps-repo/mlibc*.xbps
-                ~/.xbstrap/bin/xbps-rindex -c xbps-repo
+                # xbstrap looks packages up by name, so repodata must be rebuilt from scratch.
+                rm -f xbps-repo/mlibc*.xbps xbps-repo/*-repodata
+                XBPS_ARCH=x86_64 ~/.xbstrap/bin/xbps-rindex -fa xbps-repo/*.xbps
                 xbstrap install mlibc
           - name: Save prebuilt xbps dependencies cache
             if: steps.cache-xbps.outputs.cache-hit != 'true'
@@ -165,10 +166,20 @@ jobs:
                 fetch-depth: 0
           - name: Alias origin/master (xbstrap rolling version)
             run: git -C src/managarm update-ref refs/remotes/origin/master "${{ github.sha }}"
+          - name: Checkout Nomilia mlibc fork
+            uses: actions/checkout@v6
+            with:
+                repository: mel0k1/mlibc
+                ref: "${{ env.NOMILIA_MLIBC_BRANCH }}"
+                path: src/mlibc/
+                fetch-depth: 0
+          - name: Alias mlibc origin/master (xbstrap rolling version)
+            run: git -C src/mlibc update-ref refs/remotes/origin/master "$(git -C src/mlibc rev-parse HEAD)"
           - name: Build ${{ matrix.pkg }}
             run: |
                 set -x
                 touch src/managarm/checkedout.xbstrap
+                touch src/mlibc/checkedout.xbstrap
                 cp src/managarm/ci/bootstrap-site-x86_64.yml build/bootstrap-site.yml
                 cd build
                 xbstrap init ../src
@@ -241,10 +252,20 @@ jobs:
                 fetch-depth: 0
           - name: Alias origin/master (xbstrap rolling version)
             run: git -C src/managarm update-ref refs/remotes/origin/master "${{ github.sha }}"
+          - name: Checkout Nomilia mlibc fork
+            uses: actions/checkout@v6
+            with:
+                repository: mel0k1/mlibc
+                ref: "${{ env.NOMILIA_MLIBC_BRANCH }}"
+                path: src/mlibc/
+                fetch-depth: 0
+          - name: Alias mlibc origin/master (xbstrap rolling version)
+            run: git -C src/mlibc update-ref refs/remotes/origin/master "$(git -C src/mlibc rev-parse HEAD)"
           - name: Assemble the image
             run: |
                 set -x
                 touch src/managarm/checkedout.xbstrap
+                touch src/mlibc/checkedout.xbstrap
                 cp src/managarm/ci/bootstrap-site-x86_64.yml build/bootstrap-site.yml
                 cd build
                 xbstrap init ../src
