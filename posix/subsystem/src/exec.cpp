@@ -15,6 +15,10 @@ constexpr size_t kPageSize = 0x1000;
 constexpr uintptr_t ldsoBaseAddress = 0x40000000;
 
 #ifdef __x86_64__
+constexpr uintptr_t vdsoClockPageAddress = NOMILIA_VDSO_CLOCK_PAGE;
+constexpr uintptr_t vdsoTrackPageAddress = NOMILIA_VDSO_TRACK_PAGE;
+constexpr uintptr_t vdsoTextAddress = NOMILIA_VDSO_TEXT_BASE;
+
 extern "C" const unsigned char nomilia_vdso_blob[];
 extern "C" const unsigned long nomilia_vdso_size;
 #endif
