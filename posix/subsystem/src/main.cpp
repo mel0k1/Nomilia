@@ -259,6 +259,10 @@ struct CpuinfoNode final : public procfs::RegularNode {
 		co_return stream.str();
 	}
 
+	async::result<void> store(std::string) override {
+		throw std::runtime_error("Cannot store to /proc/cpuinfo");
+	}
+
 private:
 	std::string formatCpu(unsigned int index) const;
 };
