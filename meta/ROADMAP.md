@@ -27,7 +27,8 @@
 
 Первая настоящая фича Nomilia. Цель — **немодифицированный статический musl-бинарник (busybox) запускается и работает**.
 
-- [ ] `exec.cpp`: auxv-расширение — `AT_RANDOM`, `AT_CLKTCK`, `AT_HWCAP`, `AT_UID/EUID/GID/EGID`, `AT_PLATFORM`
+- [x] `exec.cpp`: `AT_RANDOM` в auxv — 16 случайных байт через `helGetRandomBytes`
+- [ ] `exec.cpp`: `AT_CLKTCK`, `AT_HWCAP`, `AT_UID/EUID/GID/EGID`, `AT_PLATFORM`
 - [ ] Ядро: `FUTEX_REQUEUE` (+ оценка потребности в PI-вариантах) в `FutexRealm`
 - [ ] procfs: `cpuinfo`, `meminfo`, `status`, `environ`, `cmdline`, `self/maps` в Linux-формате
 - [ ] mlibc: слой `linux-sysdeps` — таблица «Linux nr → bragi» для статической musl-персональности
