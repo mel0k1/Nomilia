@@ -17,12 +17,14 @@ env:
     # bootstrap-managarm revision matching our upstream snapshot (2026-10).
     # Bump it when rebasing the Nomilia tree onto a newer managarm snapshot.
     BOOTSTRAP_COMMIT: 1c1536cd908f319819317b80f0d37f6ba736b1ac
+    # Nomilia mlibc fork branch built from source (linux-compat sysdeps).
+    NOMILIA_MLIBC_BRANCH: nomilia
 
 jobs:
     cache-prereqs:
         name: Cache build prerequisites
         runs-on: ubuntu-24.04
-        timeout-minutes: 60
+        timeout-minutes: 120
         outputs:
             caching-key: ${{ steps.keys.outputs.caching-key }}
         steps:
@@ -32,7 +34,9 @@ jobs:
                 set -x
                 mlibc_remote="$(git ls-remote https://github.com/managarm/mlibc.git refs/heads/master)"
                 mlibc_head="$(grep -Po '[0-9a-z]+(?=\t+refs/heads/master$)' <<< $mlibc_remote)"
-                echo "caching-key=${{ env.BOOTSTRAP_COMMIT }}-$mlibc_head" >> "$GITHUB_OUTPUT"
+                fork_remote="$(git ls-remote https://github.com/mel0k1/mlibc.git refs/heads/${{ env.NOMILIA_MLIBC_BRANCH }})"
+                fork_head="$(awk '{print $1}' <<< $fork_remote)"
+                echo "caching-key=${{ env.BOOTSTRAP_COMMIT }}-$mlibc_head-$fork_head" >> "$GITHUB_OUTPUT"
           - id: cache-rootfs
             name: Cache buildenv rootfs
             uses: actions/cache@v5
@@ -73,11 +77,23 @@ jobs:
           - name: Alias origin/master (xbstrap rolling version)
             if: steps.cache-xbps.outputs.cache-hit != 'true'
             run: git -C src/managarm update-ref refs/remotes/origin/master "${{ github.sha }}"
+          - name: Checkout Nomilia mlibc fork
+            if: steps.cache-xbps.outputs.cache-hit != 'true'
+            uses: actions/checkout@v6
+            with:
+                repository: mel0k1/mlibc
+                ref: "${{ env.NOMILIA_MLIBC_BRANCH }}"
+                path: src/mlibc/
+                fetch-depth: 0
+          - name: Alias mlibc origin/master (xbstrap rolling version)
+            if: steps.cache-xbps.outputs.cache-hit != 'true'
+            run: git -C src/mlibc update-ref refs/remotes/origin/master "$(git -C src/mlibc rev-parse HEAD)"
           - name: Pull prebuilt dependencies
             if: steps.cache-xbps.outputs.cache-hit != 'true'
             run: |
                 set -x
                 touch src/managarm/checkedout.xbstrap
+                touch src/mlibc/checkedout.xbstrap
                 mkdir build/
                 cp src/managarm/ci/bootstrap-site-x86_64.yml build/bootstrap-site.yml
                 cd build
@@ -88,6 +104,9 @@ jobs:
                 xbstrap pull-pack -c --deps-of weston-desktop
                 # Never cache the packages that Nomilia builds from source.
                 rm -f xbps-repo/managarm-[0-9]*.xbps xbps-repo/managarm-kernel*.xbps xbps-repo/managarm-system*.xbps
+                # Build mlibc from the Nomilia fork instead of caching upstream prebuilts.
+                rm -f xbps-repo/mlibc*.xbps
+                xbstrap install mlibc
 
     build-package:
         strategy:
