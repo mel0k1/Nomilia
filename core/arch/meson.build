@@ -1,0 +1,18 @@
+inc = include_directories('include')
+deps = [ libarch_base, helix_dep, frigg, bragi_dep, libasync_dep, core_dep ]
+
+if build_drivers
+	libarch_libary = shared_library(
+		'arch',
+		'src/dma_pool.cpp',
+		dependencies: deps,
+		include_directories: inc,
+		install: true
+	)
+
+	libarch = declare_dependency(
+		link_with : libarch_libary,
+		dependencies : deps,
+		include_directories : inc
+	)
+endif

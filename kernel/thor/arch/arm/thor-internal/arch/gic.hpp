@@ -1,0 +1,103 @@
+#pragma once
+
+#include <arch/mem_space.hpp>
+#include <frg/dyn_bitset.hpp>
+#include <initgraph.hpp>
+#include <thor-internal/arch-generic/cpu.hpp>
+#include <thor-internal/dtb/irq.hpp>
+#include <thor-internal/irq.hpp>
+#include <thor-internal/kernel-heap.hpp>
+
+namespace thor {
+
+struct Gic : dt::IrqController {
+	struct CpuIrq {
+		uint32_t cpu;
+		uint32_t irq;
+	};
+
+	struct Pin : public IrqPin {
+		virtual ~Pin() = default;
+
+		Pin(frg::string<KernelAlloc> name) : IrqPin{std::move(name)} {}
+
+		virtual bool setMode(TriggerMode trigger) = 0;
+
+		IrqStrategy program(TriggerMode mode, Polarity polarity) override = 0;
+
+		void mask() override = 0;
+		void unmask() override = 0;
+
+		void endOfInterrupt() override = 0;
+	};
+
+	virtual smarter::shared_ptr<Pin> setupIrq(uint32_t irq, TriggerMode trigger) = 0;
+	virtual smarter::shared_ptr<Pin> getPin(uint32_t irq) = 0;
+	virtual uint32_t irqCount() = 0;
+
+	smarter::shared_ptr<IrqPin> resolveDtIrq(dtb::Cells irqSpecifier) override {
+		if (irqSpecifier.numCells() != 3 && irqSpecifier.numCells() != 4)
+			panicLogger() << "GIC #interrupt-cells should be 3 or 4" << frg::endlog;
+		uint32_t type;
+		if (!irqSpecifier.readSlice(type, 0, 1))
+			panicLogger() << "Failed to read GIC interrupt type" << frg::endlog;
+		uint32_t idx;
+		if (!irqSpecifier.readSlice(idx, 1, 1))
+			panicLogger() << "Failed to read GIC interrupt index" << frg::endlog;
+		uint32_t flags;
+		if (!irqSpecifier.readSlice(flags, 2, 1))
+			panicLogger() << "Failed to read GIC interrupt flags" << frg::endlog;
+		frg::optional<uint32_t> ppiHandle = 0;
+		if (!irqSpecifier.readSlice(*ppiHandle, 3, 1))
+			ppiHandle = frg::null_opt;
+
+		// TODO(qookie): Handle extended PPI and SPI.
+		if (type != 0 && type != 1)
+			panicLogger() << "Unexpected GIC interrupt type " << type << frg::endlog;
+
+		TriggerMode trigger;
+		Polarity polarity;
+
+		switch (flags & 0xF) {
+			case 1:
+				polarity = Polarity::high;
+				trigger = TriggerMode::edge;
+				break;
+			case 2:
+				polarity = Polarity::low;
+				trigger = TriggerMode::edge;
+				break;
+			case 4:
+				polarity = Polarity::high;
+				trigger = TriggerMode::level;
+				break;
+			case 8:
+				polarity = Polarity::low;
+				trigger = TriggerMode::level;
+				break;
+			default:
+				infoLogger() << "thor: Illegal IRQ flags " << (flags & 0xF)
+				             << " found when parsing GIC interrupt" << frg::endlog;
+				polarity = Polarity::null;
+				trigger = TriggerMode::null;
+		}
+
+		auto irq = idx + (type == 1 ? 16 : 32);
+
+		// The GIC does not support configuring IRQ polarity, hence setupIrq()
+		// programs the pin with Polarity::null.
+		(void)polarity;
+		auto pin = setupIrq(irq, trigger);
+		return pin;
+	}
+
+	smarter::shared_ptr<IrqPin> resolveIrqIndex(uint64_t index) override {
+		if (index >= irqCount())
+			return nullptr;
+		return getPin(index);
+	}
+};
+
+void initGicOnThisCpu();
+
+} // namespace thor

@@ -1,0 +1,13 @@
+[package]
+name = "hel"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+async-task = { version = "4.7", default-features = false }
+bitflags = "2.9.0"
+hel-sys.workspace = true

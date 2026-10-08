@@ -1,0 +1,276 @@
+namespace "managarm::hw";
+
+enum Errors {
+	SUCCESS = 0,
+	OUT_OF_BOUNDS,
+	ILLEGAL_ARGUMENTS,
+	RESOURCE_EXHAUSTION,
+	DEVICE_ERROR,
+	PROPERTY_NOT_FOUND
+}
+
+enum IoType {
+	NO_BAR = 0,
+	PORT,
+	MEMORY
+}
+
+struct PciBar {
+	IoType io_type;
+	IoType host_type;
+	uint64 address;
+	uint64 length;
+	uint32 offset;
+}
+
+struct PciExpansionRom {
+	uint64 address;
+	uint64 length;
+}
+
+struct PciCapability {
+	uint32 type;
+	uint64 offset;
+	uint64 length;
+}
+
+struct DtRegister {
+	uint64 address;
+	uint64 length;
+	uint32 offset;
+}
+
+struct DtProperty {
+	string name;
+	byte[] data;
+}
+
+message GetPciInfoRequest 1 {
+head(128):
+}
+
+message AccessBarRequest 2 {
+head(128):
+	int32 index;
+}
+
+message AccessIrqRequest 3 {
+head(128):
+	uint64 index;
+}
+
+message AccessExpansionRomRequest 16 {
+head(128):
+}
+
+message InstallMsiRequest 14 {
+head(128):
+	uint32 index;
+}
+
+message ClaimDeviceRequest 4 {
+head(128):
+}
+
+message EnableBusIrqRequest 5 {
+head(128):
+}
+
+message EnableMsiRequest 15 {
+head(128):
+}
+
+message EnableBusmasterRequest 6 {
+head(128):
+}
+
+message LoadPciSpaceRequest 7 {
+head(128):
+	uint32 offset;
+	uint32 size;
+}
+
+message StorePciSpaceRequest 8 {
+head(128):
+	uint32 offset;
+	uint32 size;
+	uint32 word;
+}
+
+message LoadPciCapabilityRequest 9 {
+head(128):
+	int32 index;
+	uint32 offset;
+	uint32 size;
+}
+
+message GetFbInfoRequest 10 {
+head(128):
+}
+
+message AccessFbMemoryRequest 11 {
+head(128):
+}
+
+message RebootRequest 12 {
+head(128):
+	int64 cmd;
+}
+
+message SvrResponse 13 {
+head(128):
+	Errors error;
+tail:
+	tags {
+		tag(1) PciBar[] bars;
+		tag(2) PciCapability[] capabilities;
+		tag(9) uint32 num_msis;
+		tag(13) uint8 msi_x;
+		tag(10) PciExpansionRom expansion_rom;
+
+		tag(3) uint32 word;
+
+		tag(4) uint32 fb_pitch;
+		tag(5) uint32 fb_width;
+		tag(6) uint32 fb_height;
+		tag(7) uint32 fb_bpp;
+		tag(8) uint32 fb_type;
+
+		tag(11) DtRegister[] dt_regs;
+		tag(12) uint32 num_dt_irqs;
+
+		tag(14) uint32 vbt_size;
+	}
+}
+
+message BatteryStateRequest 17 {
+head(128):
+	uint64 id;
+	uint32 block_until_ready;
+}
+
+message BatteryStateReply 18 {
+head(16):
+	Errors error;
+tail:
+	// Units used here:
+	// voltage: µV
+	// current: µA
+	// charge: µAh
+	// energy: µWh
+	// time: seconds
+	// temperature: tenths of degrees Celsius
+
+	tags {
+		tag(1) uint8 charging;
+		tag(2) uint64 current_now;
+		tag(3) uint64 power_now;
+		tag(4) uint64 energy_now;
+		tag(5) uint64 energy_full;
+		tag(6) uint64 energy_full_design;
+		tag(7) uint64 voltage_now;
+		tag(8) uint64 voltage_min_design;
+	}
+}
+
+message AcpiGetResourcesRequest 19 {
+head(16):
+}
+
+message AcpiGetResourcesReply 20 {
+head(16):
+	Errors error;
+tail:
+	uint16[] io_ports;
+	uint16[] fixed_io_ports;
+	uint32[] irqs;
+}
+
+message GetDtInfoRequest 21 {
+head(128):
+}
+
+message AccessDtRegisterRequest 22 {
+head(128):
+	uint32 index;
+}
+
+message InstallDtIrqRequest 23 {
+head(128):
+	uint32 index;
+}
+
+message EnableDmaRequest 24 {
+head(128):
+	int8 passthrough;
+}
+
+message GetSmbiosHeaderRequest 25 {
+head(128):
+}
+
+message GetSmbiosHeaderReply 26 {
+head(128):
+	Errors error;
+	uint32 size;
+}
+
+message GetSmbiosTableRequest 27 {
+head(128):
+}
+
+message GetSmbiosTableReply 28 {
+head(128):
+	Errors error;
+	uint32 size;
+}
+
+message GetDtPropertyRequest 29 {
+head(128):
+	string name;
+}
+
+message GetDtPropertyResponse 30 {
+head(128):
+	Errors error;
+
+tail:
+	byte[] data;
+}
+
+message GetDtPropertiesRequest 31 {
+head(128):
+}
+
+message GetDtPropertiesResponse 32 {
+head(128):
+	Errors error;
+
+tail:
+	DtProperty[] properties;
+}
+
+message GetDtPathRequest 33 {
+head(128):
+}
+
+message GetDtPathResponse 34 {
+head(128):
+	Errors error;
+
+tail:
+	string path;
+}
+
+message GetVbtRequest 35 {
+head(128):
+}
+
+message GetDmaSpaceRequest 36 {
+head(128):
+}
+
+message GetDmaSpaceResponse 37 {
+head(128):
+	int8 iommu_active;
+}

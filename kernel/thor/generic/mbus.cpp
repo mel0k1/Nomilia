@@ -1,0 +1,171 @@
+#include <thor-internal/stream.hpp>
+#include <thor-internal/mbus.hpp>
+
+#include <bragi/helpers-all.hpp>
+#include <bragi/helpers-frigg.hpp>
+
+#include <mbus.frigg_bragi.hpp>
+
+namespace thor {
+
+// TODO: Move this to a header file.
+extern frg::manual_box<smarter::shared_ptr<Stream, LanePolicy>> mbusClient;
+
+coroutine<frg::expected<Error, size_t>> KernelBusObject::createObject(frg::string_view name, Properties &&properties) {
+	auto [offerError, conversation] = co_await offer(*mbusClient);
+	if (offerError != Error::success)
+		co_return offerError;
+
+	managarm::mbus::CreateObjectRequest<KernelAlloc> req(*kernelAlloc);
+	req.set_name(frg::string<KernelAlloc>{name, *kernelAlloc});
+
+	for (auto property : properties.properties_) {
+		managarm::mbus::Property<KernelAlloc> reqProperty(*kernelAlloc);
+		reqProperty.set_name(frg::string<KernelAlloc>(*kernelAlloc, property.name));
+		// TODO(no92): have thor support non-string item types
+		managarm::mbus::AnyItem<KernelAlloc> item(*kernelAlloc);
+		item.set_type(managarm::mbus::ItemType::STRING);
+		item.set_string_item(std::move(property.value));
+		reqProperty.set_item(item);
+		req.add_properties(std::move(reqProperty));
+	}
+
+	frg::unique_memory<KernelAlloc> headBuffer{*kernelAlloc, req.size_of_head()};
+	frg::unique_memory<KernelAlloc> tailBuffer{*kernelAlloc, req.size_of_tail()};
+	bragi::write_head_tail(req, headBuffer, tailBuffer);
+	auto headError = co_await sendBuffer(conversation, std::move(headBuffer));
+	auto tailError = co_await sendBuffer(conversation, std::move(tailBuffer));
+
+	if (headError != Error::success)
+		co_return headError;
+	if (tailError != Error::success)
+		co_return tailError;
+
+	auto [respError, respBuffer] = co_await recvBuffer(conversation);
+
+	if (respError != Error::success)
+		co_return respError;
+
+	auto [descError, descriptor] = co_await pullDescriptor(conversation);
+
+	if (descError != Error::success)
+		co_return descError;
+	if (!descriptor.is<DescriptorType::lane>())
+		co_return Error::protocolViolation;
+
+	auto resp = bragi::parse_head_only<managarm::mbus::CreateObjectResponse>(respBuffer, *kernelAlloc);
+	if (!resp)
+		co_return Error::protocolViolation;
+	if (resp->error() != managarm::mbus::Error::SUCCESS)
+		co_return Error::illegalState;
+
+	auto laneOutcome = descriptor.resolveObject<DescriptorType::lane>(kHelRightInvoke | kHelRightManage);
+	if (!laneOutcome)
+		co_return laneOutcome.error();
+
+	mbusId_ = resp->id();
+	mgmtLane_ = std::move(*laneOutcome);
+
+	spawnOnWorkQueue(*kernelAlloc, WorkQueue::generalQueue().lock(), handleMbusComms_());
+
+	co_return resp->id();
+}
+
+coroutine<Error> KernelBusObject::updateProperties(Properties &properties) {
+	auto [offerError, conversation] = co_await offer(mgmtLane_);
+	if (offerError != Error::success)
+		co_return offerError;
+
+	managarm::mbus::UpdatePropertiesRequest<KernelAlloc> req(*kernelAlloc);
+	for(auto &[name, value] : properties.properties_) {
+		managarm::mbus::Property<KernelAlloc> prop(*kernelAlloc);
+		prop.set_name(name);
+		// TODO(no92): have thor support non-string item types
+		managarm::mbus::AnyItem<KernelAlloc> item(*kernelAlloc);
+		item.set_type(managarm::mbus::ItemType::STRING);
+		item.set_string_item(std::move(value));
+		prop.set_item(item);
+		req.add_properties(prop);
+	}
+
+	assert(req.properties_size());
+
+	frg::unique_memory<KernelAlloc> headBuffer{*kernelAlloc, req.size_of_head()};
+	frg::unique_memory<KernelAlloc> tailBuffer{*kernelAlloc, req.size_of_tail()};
+	bragi::write_head_tail(req, headBuffer, tailBuffer);
+	auto headError = co_await sendBuffer(conversation, std::move(headBuffer));
+	auto tailError = co_await sendBuffer(conversation, std::move(tailBuffer));
+
+	if (headError != Error::success)
+		co_return headError;
+	if (tailError != Error::success)
+		co_return tailError;
+
+	auto [respError, respBuffer] = co_await recvBuffer(conversation);
+
+	if (respError != Error::success)
+		co_return respError;
+
+	auto maybeResp = bragi::parse_head_only<managarm::mbus::UpdatePropertiesResponse>(respBuffer, *kernelAlloc);
+	if (!maybeResp)
+		co_return Error::protocolViolation;
+
+	auto &resp = *maybeResp;
+	if (resp.error() == managarm::mbus::Error::NO_SUCH_ENTITY)
+		co_return Error::illegalArgs;
+
+	if(resp.error() != managarm::mbus::Error::SUCCESS) {
+		infoLogger() << "thor: unexpected return code in updateProperties" << frg::endlog;
+		co_return Error::protocolViolation;
+	}
+
+	co_return Error::success;
+}
+
+coroutine<void> KernelBusObject::handleMbusComms_() {
+	while (true) {
+		// TODO(qookie): Improve error handling here?
+		// Perhaps we should at least log a message.
+		(void)(co_await handleServeRemoteLane_());
+	}
+}
+
+coroutine<frg::expected<Error>> KernelBusObject::handleServeRemoteLane_() {
+	auto [offerError, conversation] = co_await offer(mgmtLane_);
+	if (offerError != Error::success)
+		co_return offerError;
+
+	managarm::mbus::ServeRemoteLaneRequest<KernelAlloc> req(*kernelAlloc);
+
+	frg::unique_memory<KernelAlloc> headBuffer{*kernelAlloc, req.size_of_head()};
+	bragi::write_head_only(req, headBuffer);
+	auto headError = co_await sendBuffer(conversation, std::move(headBuffer));
+
+	if (headError != Error::success)
+		co_return headError;
+
+	auto lane = initiateClient();
+
+	auto descError = co_await pushDescriptor(
+		conversation,
+		AnyDescriptor::make<DescriptorType::lane>(lane, kHelRightInvoke | kHelRightManage)
+	);
+
+	if (descError != Error::success)
+		co_return descError;
+
+	auto [respError, respBuffer] = co_await recvBuffer(conversation);
+
+	if (respError != Error::success)
+		co_return respError;
+
+	auto resp = bragi::parse_head_only<managarm::mbus::ServeRemoteLaneResponse>(respBuffer, *kernelAlloc);
+	if (!resp)
+		co_return Error::protocolViolation;
+	if (resp->error() != managarm::mbus::Error::SUCCESS)
+		co_return Error::illegalState;
+
+	co_return frg::success;
+}
+
+} // namespace thor

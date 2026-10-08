@@ -1,0 +1,347 @@
+#pragma once
+
+#include <stddef.h>
+#include <concepts>
+#include <tuple>
+#include <utility>
+
+#include <thor-internal/arch-generic/paging-consts.hpp>
+#include <thor-internal/arch-generic/asid.hpp>
+#include <thor-internal/physical.hpp>
+#include <thor-internal/cpu-data.hpp>
+
+namespace thor {
+
+template <typename T>
+concept CursorPolicy = requires (T policy, uint64_t pte, uint64_t *ptePtr,
+		PhysicalAddr pa, PageFlags flags, CachingMode cachingMode) {
+	// Maximum possible number of table levels.
+	{ T::maxLevels } -> std::convertible_to<size_t>;
+	// Amount of levels currently in use. May depend on the policy state.
+	{ policy.numLevels() } -> std::convertible_to<size_t>;
+	// How many bits of the address each level resolves.
+	{ T::bitsPerLevel } -> std::convertible_to<size_t>;
+
+	// Check whether the given PTE say the page is present.
+	{ T::ptePagePresent(pte) } -> std::same_as<bool>;
+	// Check whether the given PTE can be accessed with the given flags.
+	{ T::ptePageCanAccess(pte, flags) } -> std::same_as<bool>;
+	// Get the page address from the given PTE.
+	{ T::ptePageAddress(pte) } -> std::same_as<PhysicalAddr>;
+	// Get the status (present, dirty) from the given PTE.
+	{ T::ptePageStatus(pte) } -> std::same_as<PageStatus>;
+	// Mask of the PTE bits that encode the caching mode.
+	{ T::ptePageCachingMask } -> std::convertible_to<uint64_t>;
+	// Clean the given PTE (remove the dirty status). Returns the previous PTE value.
+	{ T::pteClean(ptePtr) } -> std::same_as<uint64_t>;
+	// Age the given PTE. Returns the previous PTE value and whether the page was unmapped.
+	{ T::pteAge(ptePtr, bool{}) } -> std::same_as<std::pair<uint64_t, bool>>;
+	// Construct a new PTE from the given parameters.
+	{ T::pteBuild(pa, flags, cachingMode) } -> std::same_as<uint64_t>;
+	// Synchronize the page table write with the page table walker.
+	{ policy.pteWriteBarrier(ptePtr) } -> std::same_as<void>;
+	// Synchronize the I-Cache for a page that is about to become executable.
+	{ T::pteSyncICache(pa) } -> std::same_as<void>;
+
+	// Check whether the given PTE say the table is present.
+	{ T::pteTablePresent(pte) } -> std::same_as<bool>;
+	// Get the table address from the given PTE.
+	{ T::pteTableAddress(pte) } -> std::same_as<PhysicalAddr>;
+	// Allocate a new page table and construct a PTE for it.
+	{ policy.pteNewTable() } -> std::same_as<uint64_t>;
+};
+
+template <CursorPolicy Policy>
+struct PageCursor {
+	using PolicyType = Policy;
+
+	inline static constexpr uintptr_t levelMask = (uintptr_t{1} << Policy::bitsPerLevel) - 1;
+	inline static constexpr size_t lastLevel = Policy::maxLevels - 1;
+
+	PageCursor(PageSpace *space, uintptr_t va, Policy policy = {})
+	: space_{space}, va_{}, policy_{policy},
+			initialLevel_{Policy::maxLevels - policy_.numLevels()} {
+		accessors_[initialLevel_] = {space->rootTable()};
+		moveTo(va);
+	}
+
+private:
+	constexpr size_t levelShift(size_t level) {
+		return Policy::bitsPerLevel * (Policy::maxLevels - 1 - level) + 12;
+	}
+
+	uint64_t *currentPtePtr_() {
+		return reinterpret_cast<uint64_t *>(accessors_[lastLevel].get())
+			+ ((va_ >> 12) & levelMask);
+	}
+
+	uint64_t readCurrentPte_() {
+		return __atomic_load_n(currentPtePtr_(), __ATOMIC_RELAXED);
+	}
+
+	uint64_t exchangeCurrentPte_(uint64_t value) {
+		return __atomic_exchange_n(currentPtePtr_(), value, __ATOMIC_RELAXED);
+	}
+
+	// Advances by the size of an entry in the deepest page table that is present.
+	// Precondition: the last level is not present.
+	void advancePastAbsentTable_(uintptr_t limit) {
+		assert(!accessors_[lastLevel]);
+		size_t level = initialLevel_;
+		while(level + 1 < Policy::maxLevels && accessors_[level + 1])
+			++level;
+
+		auto next = (va_ | ((uintptr_t{1} << levelShift(level)) - 1)) + 1;
+		moveTo(!next || next > limit ? limit : next);
+	}
+
+public:
+	uintptr_t virtualAddress() {
+		return va_;
+	}
+
+	void moveTo(uintptr_t va) {
+		// The table at level i is selected by the index that level i - 1 resolves.
+		for(size_t i = initialLevel_ + 1; i < Policy::maxLevels; i++) {
+			if((va_ ^ va) & (levelMask << levelShift(i - 1))) {
+				for(size_t j = i; j < Policy::maxLevels; j++) {
+					accessors_[j] = {};
+				}
+				break;
+			}
+		}
+
+		va_ = va;
+		reloadLevel_(lastLevel);
+	}
+
+	void advance4k() {
+		moveTo(va_ + kPageSize);
+	}
+
+	bool findPresent(uintptr_t limit) {
+		while(va_ < limit) {
+			if(!accessors_[lastLevel]) {
+				advancePastAbsentTable_(limit);
+				continue;
+			}
+
+			auto ptEnt = readCurrentPte_();
+			if(Policy::ptePagePresent(ptEnt))
+				return true;
+
+			advance4k();
+		}
+
+		return false;
+	}
+
+	bool findDirty(uintptr_t limit) {
+		while(va_ < limit) {
+			if(!accessors_[lastLevel]) {
+				advancePastAbsentTable_(limit);
+				continue;
+			}
+
+			auto ptEnt = readCurrentPte_();
+			if(Policy::ptePagePresent(ptEnt) && (Policy::ptePageStatus(ptEnt) & page_status::dirty))
+				return true;
+
+			advance4k();
+		}
+
+		return false;
+	}
+
+	std::tuple<PageStatus, PhysicalAddr> map4k(PhysicalAddr pa, PageFlags flags, CachingMode cachingMode) {
+		if(!accessors_[lastLevel])
+			realizePts_();
+
+		auto newPte = Policy::pteBuild(pa, flags, cachingMode);
+
+		if (flags & page_access::execute)
+			Policy::pteSyncICache(pa);
+
+		auto oldPte = exchangeCurrentPte_(newPte);
+		policy_.pteWriteBarrier(currentPtePtr_());
+
+		return {Policy::ptePageStatus(oldPte), Policy::ptePageAddress(oldPte)};
+	}
+
+	std::tuple<PageStatus, PhysicalAddr> remap4k(PhysicalAddr pa, PageFlags flags, CachingMode cachingMode) {
+		if(!accessors_[lastLevel])
+			realizePts_();
+
+		if (flags & page_access::execute)
+			Policy::pteSyncICache(pa);
+
+		auto ptEnt = Policy::pteBuild(pa, flags, cachingMode);
+		ptEnt = exchangeCurrentPte_(ptEnt);
+		policy_.pteWriteBarrier(currentPtePtr_());
+
+		return {Policy::ptePageStatus(ptEnt), Policy::ptePageAddress(ptEnt)};
+	}
+
+	std::tuple<PageStatus, PhysicalAddr, bool> restrict4k(PageFlags flags) {
+		if(!accessors_[lastLevel])
+			return {0, PhysicalAddr(-1), false};
+
+		uint64_t oldPte = readCurrentPte_();
+		while (true) {
+			if(!Policy::ptePagePresent(oldPte))
+				return {0, PhysicalAddr(-1), false};
+
+			PageFlags effectiveFlags = flags;
+			if(!Policy::ptePageCanAccess(oldPte, page_access::write))
+				effectiveFlags &= ~page_access::write;
+			if(!Policy::ptePageCanAccess(oldPte, page_access::execute))
+				effectiveFlags &= ~page_access::execute;
+
+			auto newPte = Policy::pteBuild(Policy::ptePageAddress(oldPte), effectiveFlags, CachingMode::null);
+			// Keep the caching mode of the page.
+			newPte &= ~Policy::ptePageCachingMask;
+			newPte |= (oldPte & Policy::ptePageCachingMask);
+			auto success = __atomic_compare_exchange_n(
+				currentPtePtr_(), &oldPte, newPte, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED
+			);
+			if (success)
+				break;
+		}
+		policy_.pteWriteBarrier(currentPtePtr_());
+
+		bool restricted = false;
+		if (!(flags & page_access::write) && Policy::ptePageCanAccess(oldPte, page_access::write))
+			restricted = true;
+		if (!(flags & page_access::execute) && Policy::ptePageCanAccess(oldPte, page_access::execute))
+			restricted = true;
+		return {Policy::ptePageStatus(oldPte), Policy::ptePageAddress(oldPte), restricted};
+	}
+
+	std::tuple<PageStatus, PhysicalAddr> clean4k() {
+		if(!accessors_[lastLevel])
+			return {0, PhysicalAddr(-1)};
+
+		auto ptEnt = policy_.pteClean(currentPtePtr_());
+		policy_.pteWriteBarrier(currentPtePtr_());
+		return {Policy::ptePageStatus(ptEnt), Policy::ptePageAddress(ptEnt)};
+	}
+
+	std::tuple<PageStatus, PhysicalAddr> unmap4k() {
+		if(!accessors_[lastLevel])
+			return {0, PhysicalAddr(-1)};
+
+		auto ptEnt = exchangeCurrentPte_(0);
+		policy_.pteWriteBarrier(currentPtePtr_());
+		return {Policy::ptePageStatus(ptEnt), Policy::ptePageAddress(ptEnt)};
+	}
+
+	std::tuple<PageStatus, PhysicalAddr, bool> age4k(bool vacate) {
+		if(!accessors_[lastLevel])
+			return {0, PhysicalAddr(-1), false};
+		auto [oldPte, unmapped] = Policy::pteAge(currentPtePtr_(), vacate);
+		if(unmapped)
+			policy_.pteWriteBarrier(currentPtePtr_());
+		return {Policy::ptePageStatus(oldPte), Policy::ptePageAddress(oldPte), unmapped};
+	}
+
+	// Low-level API for use by arch-specific code.
+public:
+	uint64_t *getPtePtr() {
+		if (!accessors_[lastLevel])
+			return nullptr;
+		return currentPtePtr_();
+	}
+
+private:
+	bool doReloadLevel_(PageAccessor &subPt, PageAccessor &pt, size_t level) {
+		auto ptPtr = reinterpret_cast<uint64_t *>(pt.get())
+			+ ((va_ >> levelShift(level)) & levelMask);
+		auto ptEnt = __atomic_load_n(ptPtr, __ATOMIC_ACQUIRE);
+
+		if(!Policy::pteTablePresent(ptEnt))
+			return false;
+
+		auto subPtPtr = Policy::pteTableAddress(ptEnt);
+		subPt = PageAccessor{subPtPtr};
+		return true;
+	}
+
+	bool reloadLevel_(size_t level) {
+		if(accessors_[level]) /*[[likely]]*/
+			return true;
+		assert(level != initialLevel_);
+		if(!reloadLevel_(level - 1))
+			return false;
+		return doReloadLevel_(accessors_[level], accessors_[level - 1], level - 1);
+	}
+
+
+	void doRealizeLevel_(PageAccessor &subPt, PageAccessor &pt, size_t level) {
+		auto ptPtr = reinterpret_cast<uint64_t *>(pt.get())
+			+ ((va_ >> levelShift(level)) & levelMask);
+		auto ptEnt = __atomic_load_n(ptPtr, __ATOMIC_ACQUIRE);
+
+		if(Policy::pteTablePresent(ptEnt)) {
+			auto subPtPtr = Policy::pteTableAddress(ptEnt);
+			subPt = PageAccessor{subPtPtr};
+			return;
+		}
+
+		ptEnt = policy_.pteNewTable();
+		auto subPtPtr = Policy::pteTableAddress(ptEnt);
+		subPt = PageAccessor{subPtPtr};
+
+		__atomic_store_n(ptPtr, ptEnt, __ATOMIC_RELEASE);
+		policy_.pteWriteBarrier(ptPtr);
+	}
+
+	void realizeLevel_(size_t level) {
+		if(accessors_[level]) /*[[likely]]*/
+			return;
+		assert(level != initialLevel_);
+		realizeLevel_(level - 1);
+		return doRealizeLevel_(accessors_[level], accessors_[level - 1], level - 1);
+	}
+
+	void realizePts_() {
+		auto irqLock = frg::guard(&irqMutex());
+		auto lock = frg::guard(&space_->tableMutex());
+		{
+			realizeLevel_(lastLevel);
+		}
+	}
+
+private:
+	PageSpace *space_;
+	uintptr_t va_;
+
+	[[no_unique_address]] Policy policy_;
+
+	size_t initialLevel_;
+
+	PageAccessor accessors_[Policy::maxLevels];
+};
+
+// Free page tables recursively. Only frees the page table pages, not the leaf pages.
+template<CursorPolicy Policy, size_t N, bool LowerHalfOnly = false, size_t RootTableSize = kPageSize>
+void freePt(PhysicalAddr tblPa) {
+	PageAccessor accessor{tblPa};
+	auto tblPtr = reinterpret_cast<uint64_t *>(accessor.get());
+	for(int i = 0; i < (LowerHalfOnly ? 256 : 512); i++) { // TODO: Use bitsPerLevel.
+		assert(!Policy::ptePagePresent(tblPtr[i]));
+		if(!Policy::pteTablePresent(tblPtr[i]))
+			continue;
+		auto subTblPa = Policy::pteTableAddress(tblPtr[i]);
+		if constexpr (N > 1) {
+			freePt<Policy, N - 1>(subTblPa);
+		} else {
+			// Free last level page table.
+			physicalAllocator->free(subTblPa, kPageSize);
+		}
+	}
+
+	// Free higher level page table.
+	physicalAllocator->free(tblPa, RootTableSize);
+}
+
+} // namespace thor

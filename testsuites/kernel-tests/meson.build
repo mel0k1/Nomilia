@@ -1,0 +1,14 @@
+executable('kernel-tests',
+	[
+		'src/main.cpp',
+		'src/clock.cpp',
+		'src/faults.cpp',
+		'src/mapping.cpp',
+		'src/memory.cpp',
+		'src/protect.cpp',
+		'src/sequenced-events.cpp',
+		'src/swap.cpp',
+	],
+	dependencies: [ helix_dep, core_dep ],
+	install : true
+)

@@ -1,0 +1,1344 @@
+namespace "managarm::posix";
+
+enum Errors {
+	SUCCESS = 0,
+	DEAD_FORK = 6,
+	ILLEGAL_REQUEST = 4,
+	ILLEGAL_ARGUMENTS = 9,
+	FILE_NOT_FOUND = 1,
+	ACCESS_DENIED = 2,
+	ALREADY_EXISTS = 3,
+	NO_SUCH_FD = 5,
+	END_OF_FILE = 7,
+	BAD_FD = 8,
+	WOULD_BLOCK = 10,
+	BROKEN_PIPE = 11,
+	NOT_SUPPORTED = 12,
+	RESOURCE_IN_USE = 13,
+	ILLEGAL_OPERATION_TARGET = 14,
+	NOT_A_DIRECTORY = 15,
+	NO_BACKING_DEVICE = 16,
+	NO_SUCH_RESOURCE = 17,
+	INSUFFICIENT_PERMISSION = 18,
+	IS_DIRECTORY = 19,
+	NOT_A_TTY = 20,
+	PROTOCOL_NOT_SUPPORTED = 21,
+	ADDRESS_FAMILY_NOT_SUPPORTED = 22,
+	NO_MEMORY = 23,
+	DIRECTORY_NOT_EMPTY = 24,
+	NO_CHILD_PROCESSES = 25,
+	SYMBOLIC_LINK_LOOP = 26,
+	ALREADY_CONNECTED = 27,
+	UNSUPPORTED_SOCKET_TYPE = 28,
+	INTERRUPTED = 29,
+	NAME_TOO_LONG = 30,
+	NO_FILE_DESCRIPTORS_AVAILABLE = 31,
+	CROSS_DEVICE_LINK = 32,
+	INTERNAL_ERROR = 99
+}
+
+enum EpollCtlOp {
+	EPOLL_ADD = 1,
+	EPOLL_MODIFY = 2,
+	EPOLL_DELETE = 3
+}
+
+@format(bitfield) consts OpenMode uint32 {
+	REGULAR = 1,
+	HELFD = 2
+}
+
+consts FileType uint32 {
+	FT_UNKNOWN = 0,
+	FT_REGULAR = 1,
+	FT_DIRECTORY = 2,
+	FT_SYMLINK = 3,
+	FT_FIFO = 4,
+	FT_SOCKET = 5,
+	FT_CHAR_DEVICE = 6,
+	FT_BLOCK_DEVICE = 7
+}
+
+@format(bitfield) consts OpenFlags uint32 {
+	OF_CREATE = 1,
+	OF_EXCLUSIVE = 2,
+	OF_NONBLOCK = 4,
+	OF_CLOEXEC = 256,
+	OF_RDONLY = 8,
+	OF_WRONLY = 16,
+	OF_RDWR = 32,
+	OF_TRUNC = 64,
+	OF_PATH = 128,
+	OF_NOCTTY = 512,
+	OF_APPEND = 1024,
+	OF_NOFOLLOW = 2048,
+	OF_DIRECTORY = 4096
+}
+
+@format(bitfield) consts EventFdFlags uint32 {
+	CLOEXEC = 1,
+	NONBLOCK = 2,
+	SEMAPHORE = 4
+}
+
+message VmMapRequest 3 {
+head(128):
+	int32 fd;
+	uint32 mode;
+	uint32 flags;
+	@format(hex) uint64 address_hint;
+	int64 rel_offset;
+	uint64 size;
+}
+
+message VmMapResponse 186 {
+head(128):
+	Errors error;
+	uint64 offset;
+}
+
+message OpenAtRequest 4 {
+head(128):
+	int32 fd;
+	OpenFlags flags;
+	OpenMode mode;
+tail:
+	string path;
+}
+
+message OpenAtResponse 183 {
+head(128):
+	Errors error;
+	int32 fd;
+}
+
+message CloseRequest 5 {
+head(128):
+	int32 fd;
+}
+
+message CloseResponse 185 {
+head(128):
+	Errors error;
+}
+
+message IsTtyRequest 6 {
+head(128):
+	int32 fd;
+}
+
+message IsTtyResponse 184 {
+head(128):
+	Errors error;
+	int32 mode;
+}
+
+message RenameAtRequest 7 {
+head(128):
+	int32 fd;
+	int32 newfd;
+	int32 flags;
+tail:
+	string path;
+	string target_path;
+}
+
+message RenameAtResponse 190 {
+head(128):
+	Errors error;
+}
+
+message GetUidRequest 8 {
+head(128):
+}
+
+message GetUidResponse 210 {
+head(128):
+	Errors error;
+	int64 uid;
+}
+
+message SetUidRequest 9 {
+head(128):
+	uint64 uid;
+}
+
+message SetUidResponse 211 {
+head(128):
+	Errors error;
+}
+
+message GetEuidRequest 10 {
+head(128):
+}
+
+message GetEuidResponse 212 {
+head(128):
+	Errors error;
+	int64 uid;
+}
+
+message SetEuidRequest 11 {
+head(128):
+	uint64 uid;
+}
+
+message SetEuidResponse 213 {
+head(128):
+	Errors error;
+}
+
+message GetGidRequest 12 {
+head(128):
+}
+
+message GetGidResponse 206 {
+head(128):
+	Errors error;
+	int64 gid;
+}
+
+message GetEgidRequest 13 {
+head(128):
+}
+
+message GetEgidResponse 208 {
+head(128):
+	Errors error;
+	int64 gid;
+}
+
+message SetGidRequest 14 {
+head(128):
+	uint64 uid;
+}
+
+message SetGidResponse 207 {
+head(128):
+	Errors error;
+}
+
+message SetEgidRequest 15 {
+head(128):
+	uint64 uid;
+}
+
+message SetEgidResponse 209 {
+head(128):
+	Errors error;
+}
+
+message UnlinkAtRequest 16 {
+head(128):
+	int32 fd;
+	int32 flags;
+tail:
+	string path;
+}
+
+message UnlinkAtResponse 202 {
+head(128):
+	Errors error;
+}
+
+message FstatAtRequest 17 {
+head(128):
+	int32 fd;
+	int32 flags;
+tail:
+	string path;
+}
+
+message FstatAtResponse 178 {
+head(128):
+	Errors error;
+	FileType file_type;
+	uint64 file_size;
+	uint16 mode;
+	uint64 mount_id;
+	uint64 fs_inode;
+	uint64 ref_devnum;
+	uint32 num_links;
+	uint32 uid;
+	uint32 gid;
+	int64 atime_secs;
+	uint32 atime_nanos;
+	int64 mtime_secs;
+	uint32 mtime_nanos;
+	int64 ctime_secs;
+	uint32 ctime_nanos;
+	uint64 stat_dev;
+	uint64 statx_attr;
+	uint64 statx_attr_mask;
+}
+
+message MkfifoAtRequest 18 {
+head(128):
+	int32 fd;
+	int32 mode;
+tail:
+	string path;
+}
+
+message MkfifoAtResponse 198 {
+head(128):
+	Errors error;
+}
+
+message LinkAtRequest 19 {
+head(128):
+	int32 fd;
+	int32 newfd;
+	int32 flags;
+tail:
+	string path;
+	string target_path;
+}
+
+message LinkAtResponse 189 {
+head(128):
+	Errors error;
+}
+
+message FchmodAtRequest 20 {
+head(128):
+	int32 fd;
+	int32 flags;
+	int32 mode;
+tail:
+	string path;
+}
+
+message FchmodAtResponse 204 {
+head(128):
+	Errors error;
+}
+
+message UtimensAtRequest 21 {
+head(128):
+	int32 fd;
+	int32 flags;
+	int32 mode;
+	uint64 atimeSec;
+	uint64 atimeNsec;
+	uint64 mtimeSec;
+	uint64 mtimeNsec;
+tail:
+	string path;
+}
+
+message UtimensAtResponse 205 {
+head(128):
+	Errors error;
+}
+
+message RmdirRequest 22 {
+head(128):
+tail:
+	string path;
+}
+
+message RmdirResponse 201 {
+head(128):
+	Errors error;
+}
+
+message InotifyAddRequest 23 {
+head(128):
+	int32 fd;
+	int32 flags;
+tail:
+	string path;
+}
+
+message InotifyAddResponse 196 {
+head(128):
+	Errors error;
+	int32 wd;
+}
+
+message InotifyCreateRequest 24 {
+head(128):
+	int32 flags;
+}
+
+message InotifyCreateResponse 195 {
+head(128):
+	Errors error;
+	int32 fd;
+}
+
+message EventfdCreateRequest 25 {
+head(128):
+	uint32 initval;
+	EventFdFlags flags;
+}
+
+message EventfdCreateResponse 197 {
+head(128):
+	Errors error;
+	int32 fd;
+}
+
+message SocketRequest 26 {
+head(128):
+	int32 flags;
+	int32 domain;
+	int32 socktype;
+	int32 protocol;
+}
+
+message SocketResponse 192 {
+head(128):
+	Errors error;
+	int32 fd;
+}
+
+message SockpairRequest 27 {
+head(128):
+	int32 flags;
+	int32 domain;
+	int32 socktype;
+	int32 protocol;
+}
+
+message SockpairResponse 193 {
+head(128):
+	Errors error;
+	int32[2] fds;
+}
+
+message AcceptRequest 28 {
+head(128):
+	int32 fd;
+}
+
+message AcceptResponse 219 {
+head(128):
+	Errors error;
+	int32 fd;
+}
+
+message MountRequest 29 {
+head(128):
+tail:
+	string path;
+	string target_path;
+	string fs_type;
+	string mount_data;
+}
+
+message MountResponse 221 {
+head(128):
+	Errors error;
+}
+
+message SymlinkAtRequest 30 {
+head(128):
+	int32 fd;
+tail:
+	string path;
+	string target_path;
+}
+
+message SymlinkAtResponse 188 {
+head(128):
+	Errors error;
+}
+
+message GetPpidRequest 31 {
+head(128):
+}
+
+message GetPpidResponse 181 {
+head(128):
+	Errors error;
+	int64 pid;
+}
+
+message MknodAtRequest 32 {
+head(128):
+	int32 dirfd;
+	int32 mode;
+	int32 device;
+tail:
+	string path;
+}
+
+message MknodAtResponse 199 {
+head(128):
+	Errors error;
+}
+
+message GetPgidRequest 33 {
+head(128):
+	int64 pid;
+}
+
+message GetPgidResponse 215 {
+head(128):
+	Errors error;
+	int64 pid;
+}
+
+message SetPgidRequest 34 {
+head(128):
+	int64 pid;
+	int64 pgid;
+}
+
+message SetPgidResponse 216 {
+head(128):
+	Errors error;
+}
+
+message GetSidRequest 35 {
+head(128):
+	int64 pid;
+}
+
+message GetSidResponse 214 {
+head(128):
+	Errors error;
+	int64 pid;
+}
+
+message IoctlFioclexRequest 36 {
+head(128):
+	int32 fd;
+}
+
+message IoctlFioclexResponse 222 {
+head(128):
+	Errors error;
+}
+
+message MemFdCreateRequest 37 {
+head(128):
+	int32 flags;
+tail:
+	string name;
+}
+
+message MemFdCreateResponse 179 {
+head(128):
+	Errors error;
+	int32 fd;
+}
+
+message GetPidRequest 38 {
+head(128):
+}
+
+message GetPidResponse 180 {
+head(128):
+	Errors error;
+	int64 pid;
+}
+
+message AccessAtRequest 39 {
+head(128):
+	int32 fd;
+	int32 flags;
+tail:
+	string path;
+}
+
+message AccessAtResponse 203 {
+head(128):
+	Errors error;
+}
+
+message MkdirAtRequest 40 {
+head(128):
+	int32 fd;
+	int32 mode;
+tail:
+	string path;
+}
+
+message MkdirAtResponse 187 {
+head(128):
+	Errors error;
+}
+
+message GetAffinityRequest 41 {
+head(128):
+	int64 pid;
+	uint64 size;
+}
+
+message GetAffinityResponse 218 {
+head(128):
+	Errors error;
+	int64 pid;
+}
+
+message SetAffinityRequest 42 {
+head(128):
+	int64 pid;
+tail:
+	uint8[] mask;
+}
+
+message SetAffinityResponse 217 {
+head(128):
+	Errors error;
+}
+
+message WaitIdRequest 43 {
+head(128):
+	uint16 idtype;
+	uint64 id;
+	int32 flags;
+}
+
+message WaitIdResponse 44 {
+head(128):
+	Errors error;
+	int64 pid;
+	int64 uid;
+	uint64 sig_status;
+	uint64 sig_code;
+}
+
+message ReadlinkAtRequest 45 {
+head(128):
+	int32 fd;
+tail:
+	string path;
+}
+
+message ReadlinkAtResponse 200 {
+head(128):
+	Errors error;
+}
+
+message NetserverRequest 46 {
+head(128):
+}
+
+message GetMemoryInformationRequest 91 {
+head(128):
+}
+
+message GetMemoryInformationResponse 92 {
+head(128):
+	uint64 total_usable_memory;
+	uint64 available_memory;
+	uint64 memory_unit;
+}
+
+message SysconfRequest 93 {
+head(128):
+	int32 num;
+}
+
+message SysconfResponse 94 {
+head(128):
+	Errors error;
+	int64 value;
+}
+
+message RebootRequest 47 {
+head(128):
+	int64 cmd;
+}
+
+message RebootResponse 194 {
+head(128):
+	Errors error;
+}
+
+message FstatfsRequest 95 {
+head(128):
+	int64 fd;
+tail:
+	string path;
+}
+
+message FstatfsResponse 96 {
+head(128):
+	Errors error;
+	// Note: In struct statfs, bsize and namelen are 32 bits.
+	//       We make them 64 bits for consistency here.
+	uint32 fstype;
+	uint64 block_size;
+	uint64 fragment_size;
+	uint64 num_blocks;
+	uint64 blocks_free;
+	uint64 blocks_free_user;
+	uint64 num_inodes;
+	uint64 inodes_free;
+	uint64 inodes_free_user;
+	uint64 max_name_length;
+	int32 fsid0;
+	int32 fsid1;
+	uint64 flags;
+}
+
+message ParentDeathSignalRequest 97 {
+head(128):
+	int32 signal;
+}
+
+message ParentDeathSignalResponse 98 {
+head(128):
+	Errors error;
+}
+
+message SetIntervalTimerRequest 99 {
+head(128):
+	int32 which;
+	uint64 value_sec;
+	uint64 value_usec;
+	uint64 interval_sec;
+	uint64 interval_usec;
+}
+
+message SetIntervalTimerResponse 100 {
+head(128):
+	Errors error;
+	uint64 value_sec;
+	uint64 value_usec;
+	uint64 interval_sec;
+	uint64 interval_usec;
+}
+
+message Dup2Request 101 {
+head(128):
+	int32 fd;
+	int32 newfd;
+	int32 flags;
+	int32 fcntl_mode;
+}
+
+message Dup2Response 102 {
+head(128):
+	Errors error;
+	int32 fd;
+}
+
+message InotifyRmRequest 103 {
+head(128):
+	int32 ifd;
+	int32 wd;
+}
+
+message InotifyRmReply 104 {
+head(128):
+	Errors error;
+}
+
+message TimerFdCreateRequest 105 {
+head(128):
+	int32 clock;
+	int32 flags;
+}
+
+message TimerFdCreateResponse 106 {
+head(128):
+	Errors error;
+	int32 fd;
+}
+
+message TimerFdSetRequest 107 {
+head(128):
+	int32 fd;
+	int32 flags;
+	uint64 value_sec;
+	uint64 value_nsec;
+	uint64 interval_sec;
+	uint64 interval_nsec;
+}
+
+message TimerFdSetResponse 108 {
+head(128):
+	Errors error;
+	uint64 value_sec;
+	uint64 value_nsec;
+	uint64 interval_sec;
+	uint64 interval_nsec;
+}
+
+message PidfdOpenRequest 109 {
+head(128):
+	int64 pid;
+	uint32 flags;
+}
+
+message PidfdOpenResponse 110 {
+head(128):
+	Errors error;
+	int32 fd;
+}
+
+message PidfdSendSignalRequest 111 {
+head(128):
+	int32 pidfd;
+	int32 signal;
+	uint32 flags;
+}
+
+message PidfdSendSignalResponse 112 {
+head(128):
+	Errors error;
+}
+
+message PidfdGetPidRequest 113 {
+head(128):
+	int32 pidfd;
+}
+
+message PidfdGetPidResponse 114 {
+head(128):
+	Errors error;
+	int64 pid;
+}
+
+message TimerFdGetRequest 115 {
+head(128):
+	int32 fd;
+}
+
+message TimerFdGetResponse 116 {
+head(128):
+	Errors error;
+	uint64 value_sec;
+	uint64 value_nsec;
+	uint64 interval_sec;
+	uint64 interval_nsec;
+}
+
+message TimerCreateRequest 117 {
+head(128):
+	int32 clockid;
+	int32 sigev_signo;
+	int32 sigev_tid;
+}
+
+message TimerCreateResponse 118 {
+head(128):
+	Errors error;
+	uint64 timer_id;
+}
+
+message TimerSetRequest 119 {
+head(128):
+	uint64 timer;
+	int32 flags;
+	uint64 value_sec;
+	uint64 value_nsec;
+	uint64 interval_sec;
+	uint64 interval_nsec;
+}
+
+message TimerSetResponse 120 {
+head(128):
+	Errors error;
+	uint64 value_sec;
+	uint64 value_nsec;
+	uint64 interval_sec;
+	uint64 interval_nsec;
+}
+
+message TimerGetRequest 121 {
+head(128):
+	uint64 timer;
+}
+
+message TimerGetResponse 122 {
+head(128):
+	Errors error;
+	uint64 value_sec;
+	uint64 value_nsec;
+	uint64 interval_sec;
+	uint64 interval_nsec;
+}
+
+message TimerDeleteRequest 123 {
+head(128):
+	uint64 timer;
+}
+
+message TimerDeleteResponse 124 {
+head(128):
+	Errors error;
+}
+
+message UmaskRequest 125 {
+head(128):
+	int32 newmask;
+}
+
+message UmaskResponse 126 {
+head(128):
+	// umask calls always succeed, no errors needed
+	int32 oldmask;
+}
+
+message ChdirRequest 127 {
+head(128):
+tail:
+	string path;
+}
+
+message ChdirResponse 128 {
+head(128):
+	Errors error;
+}
+
+message ChrootRequest 129 {
+head(128):
+tail:
+	string path;
+}
+
+message ChrootResponse 130 {
+head(128):
+	Errors error;
+}
+
+message SetResourceLimitRequest 131 {
+head(128):
+	int32 resource;
+	int64 cur;
+	int64 max;
+}
+
+message SetResourceLimitResponse 132 {
+head(128):
+	Errors error;
+}
+
+message ProcessDumpableRequest 133 {
+head(128):
+	byte set;
+	int64 new_value;
+}
+
+message ProcessDumpableResponse 134 {
+head(128):
+	Errors error;
+	byte value;
+}
+
+message GetGroupsRequest 135 {
+head(128):
+	uint64 size;
+}
+
+message GetGroupsResponse 136 {
+head(128):
+	Errors error;
+	uint64 entries;
+}
+
+message SetGroupsRequest 137 {
+head(128):
+	uint64 entries;
+}
+
+message SetGroupsResponse 138 {
+head(128):
+	Errors error;
+}
+
+message FchownAtRequest 139 {
+head(128):
+	int32 fd;
+	int32 flags;
+	int32 uid;
+	int32 gid;
+tail:
+	string path;
+}
+
+message FchownAtResponse 140 {
+head(128):
+	Errors error;
+}
+
+message VmRemapRequest 141 {
+head(128):
+	@format(hex) uint64 address;
+	uint64 size;
+	uint64 new_size;
+}
+
+message VmRemapResponse 220 {
+head(128):
+	Errors error;
+	uint64 offset;
+}
+
+message VmProtectRequest 142 {
+head(128):
+	@format(hex) uint64 address;
+	uint64 size;
+	uint32 mode;
+}
+
+message VmProtectResponse 182 {
+head(128):
+	Errors error;
+}
+
+message VmUnmapRequest 143 {
+head(128):
+	@format(hex) uint64 address;
+	uint64 size;
+}
+
+message VmUnmapResponse 191 {
+head(128):
+	Errors error;
+}
+
+message EpollCallRequest 144 {
+head(128):
+	int64 timeout;
+	uint64 cancellation_id;
+	uint64 signal_seq;
+	int32 has_signal_seq;
+tail:
+	int32[] fds;
+	int32[] events;
+}
+
+message EpollCallResponse 145 {
+head(128):
+	Errors error;
+tail:
+	int32[] events;
+}
+
+message EpollCtlRequest 146 {
+head(128):
+	EpollCtlOp op;
+	uint32 flags;
+	uint64 cookie;
+	int32 fd;
+	int32 newfd;
+}
+
+message EpollCtlResponse 147 {
+head(128):
+	Errors error;
+}
+
+message EpollWaitRequest 148 {
+head(128):
+	int32 fd;
+	uint32 size;
+	int64 timeout;
+	int64 sigmask;
+	int32 sigmask_needed;
+}
+
+message EpollWaitResponse 149 {
+head(128):
+	Errors error;
+}
+
+message EpollCreateRequest 150 {
+head(128):
+	int32 flags;
+}
+
+message EpollCreateResponse 151 {
+head(128):
+	Errors error;
+	int32 fd;
+}
+
+message PipeCreateRequest 152 {
+head(128):
+	int32 flags;
+}
+
+message PipeCreateResponse 153 {
+head(128):
+	Errors error;
+	int32[2] fds;
+}
+
+message SignalfdCreateRequest 154 {
+head(128):
+	int32 flags;
+	int32 fd;
+	uint64 sigset;
+}
+
+message SignalfdCreateResponse 155 {
+head(128):
+	Errors error;
+	int32 fd;
+}
+
+message SetSidRequest 156 {
+head(128):
+}
+
+message SetSidResponse 157 {
+head(128):
+	Errors error;
+	int64 sid;
+}
+
+message SigactionRequest 158 {
+head(128):
+	uint64 sig_number;
+	uint64 sig_mask;
+	@format(hex) uint64 sig_handler;
+	@format(hex) uint64 sig_restorer;
+	int32 flags;
+	uint32 mode;
+}
+
+message SigactionResponse 159 {
+head(128):
+	Errors error;
+	int32 flags;
+	uint64 sig_mask;
+	@format(hex) uint64 sig_handler;
+	@format(hex) uint64 sig_restorer;
+}
+
+message FdGetFlagsRequest 160 {
+head(128):
+	int32 fd;
+}
+
+message FdGetFlagsResponse 161 {
+head(128):
+	Errors error;
+	int32 flags;
+}
+
+message FdSetFlagsRequest 162 {
+head(128):
+	int32 fd;
+	int32 flags;
+}
+
+message FdSetFlagsResponse 163 {
+head(128):
+	Errors error;
+}
+
+message GetCwdRequest 164 {
+head(128):
+	uint32 size;
+}
+
+message GetCwdResponse 165 {
+head(128):
+	Errors error;
+	uint32 size;
+}
+
+message TtyNameRequest 166 {
+head(128):
+	int32 fd;
+}
+
+message TtyNameResponse 167 {
+head(128):
+	Errors error;
+tail:
+	string path;
+}
+
+message DupRequest 168 {
+head(128):
+	int32 fd;
+	OpenFlags flags;
+}
+
+message DupResponse 169 {
+head(128):
+	Errors error;
+	int32 fd;
+}
+
+message FchdirRequest 170 {
+head(128):
+	int32 fd;
+}
+
+message FchdirResponse 171 {
+head(128):
+	Errors error;
+}
+
+message GetResourceUsageRequest 172 {
+head(128):
+	int32 mode;
+}
+
+message GetResourceUsageResponse 173 {
+head(128):
+	Errors error;
+	uint64 ru_user_time;
+}
+
+message WaitRequest 174 {
+head(128):
+	int64 pid;
+	int32 flags;
+	uint64 cancellation_id;
+}
+
+message WaitResponse 175 {
+head(128):
+	Errors error;
+	int64 pid;
+	uint32 status;
+	uint64 ru_user_time;
+}
+
+message ServeFdRequest 176 {
+head(128):
+	char[16] passthrough_credentials;
+}
+
+message ServeFdResponse 177 {
+head(128):
+	Errors error;
+	int32 fd;
+}
+
+message DupFdQueryRequest 223 {
+head(128):
+	int32 fd;
+	int32 query_fd;
+}
+
+message DupFdQueryResponse 224 {
+head(128):
+	Errors error;
+	int32 result;
+}
+
+message GetSgidRequest 225 {
+head(128):
+}
+
+message GetSgidResponse 226 {
+head(128):
+	Errors error;
+	int64 gid;
+}
+
+message GetSuidRequest 227 {
+head(128):
+}
+
+message GetSuidResponse 228 {
+head(128):
+	Errors error;
+	int64 uid;
+}
+
+message SetSuidRequest 229 {
+head(128):
+	uint64 suid;
+}
+
+message SetSuidResponse 230 {
+head(128):
+	Errors error;
+}
+
+message SetResuidRequest 233 {
+head(128):
+	uint64 ruid;
+	uint64 euid;
+	uint64 suid;
+}
+
+message SetResuidResponse 234 {
+head(128):
+	Errors error;
+}
+
+message SetResgidRequest 235 {
+head(128):
+	uint64 rgid;
+	uint64 egid;
+	uint64 sgid;
+}
+
+message SetResgidResponse 236 {
+head(128):
+	Errors error;
+}
+
+message SetReuidRequest 237 {
+head(128):
+	uint64 ruid;
+	uint64 euid;
+}
+
+message SetReuidResponse 238 {
+head(128):
+	Errors error;
+}
+
+message SetRegidRequest 239 {
+head(128):
+	uint64 rgid;
+	uint64 egid;
+}
+
+message SetRegidResponse 240 {
+head(128):
+	Errors error;
+}
+
+message GetResuidRequest 241 {
+head(128):
+}
+
+message GetResuidResponse 242 {
+head(128):
+	Errors error;
+	int64 ruid;
+	int64 euid;
+	int64 suid;
+}
+
+message GetResgidRequest 243 {
+head(128):
+}
+
+message GetResgidResponse 244 {
+head(128):
+	Errors error;
+	int64 rgid;
+	int64 egid;
+	int64 sgid;
+}
+
+enum SynchronizeScope {
+	FILE = 1,
+	FILESYSTEM = 2,
+	ALL = 3
+}
+
+@format(bitfield) consts SynchronizeFlags uint32 {
+	DATA_ONLY = 1
+}
+
+message SynchronizeRequest 245 {
+head(128):
+	int32 fd;
+	SynchronizeScope scope;
+	SynchronizeFlags flags;
+}
+
+message SynchronizeResponse 246 {
+head(128):
+    Errors error;
+}

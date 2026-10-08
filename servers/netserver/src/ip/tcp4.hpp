@@ -1,0 +1,29 @@
+#pragma once
+
+#include <helix/ipc.hpp>
+#include <smarter.hpp>
+#include <vector>
+
+class Ip4Packet;
+
+struct TcpEndpoint {
+	friend bool operator<(const TcpEndpoint &l, const TcpEndpoint &r) {
+		return std::tie(l.port, l.ipAddress) < std::tie(r.port, r.ipAddress);
+	}
+
+	uint32_t ipAddress = 0;
+	uint16_t port = 0;
+};
+
+struct Tcp4Socket;
+
+struct Tcp4 {
+	void feedDatagram(smarter::shared_ptr<const Ip4Packet>);
+	bool tryBind(smarter::shared_ptr<Tcp4Socket> socket, bool unique, TcpEndpoint ipAddress);
+	bool unbind(TcpEndpoint remote);
+	void rebind(Tcp4Socket *socket, TcpEndpoint newEp);
+	void serveSocket(int flags, helix::UniqueLane ctrlLane, helix::UniqueLane ptLane);
+
+private:
+	std::multimap<TcpEndpoint, smarter::shared_ptr<Tcp4Socket>> binds;
+};

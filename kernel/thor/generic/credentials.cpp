@@ -1,0 +1,48 @@
+#include <stdint.h>
+
+#include <thor-internal/credentials.hpp>
+#include <thor-internal/debug.hpp>
+#include <thor-internal/kernel-heap.hpp>
+#include <thor-internal/random.hpp>
+#include <thor-internal/rcu.hpp>
+
+namespace thor {
+
+std::expected<smarter::shared_ptr<TokenObject>, Error> TokenObject::create() {
+	auto ptr = allocate_rcu_shared<TokenObject>(*kernelAlloc, CtorToken{});
+	return ptr;
+}
+
+Credentials::Credentials() {
+	size_t progress = 0;
+
+	// The chance of a collision is very low. To have a 50% probability that
+	// we collide 2 UUIDs, we'd need to generate about 10^18 of them.
+	// XXX(qookie): Verify that there indeed are no collisions?
+	//              Although that seems like a waste of time...
+	while (progress < 16) {
+		progress += generateRandomBytes(
+			_credentials.data() + progress,
+			_credentials.size() - progress);
+	}
+
+	// Set the UUID to version 4 ...
+	_credentials[6] &= 0x0f;
+	_credentials[6] |= 0x40;
+
+	// ... and variant 1.
+	_credentials[8] &= 0x3f;
+	_credentials[8] |= 0x80;
+}
+
+smarter::shared_ptr<TokenObject> hardwareAccessToken() {
+	static frg::eternal<smarter::shared_ptr<TokenObject>> singleton{[] {
+		auto outcome = TokenObject::create();
+		if (!outcome)
+			panicLogger() << "thor: Failed to create global hardwareAccessToken" << frg::endlog;
+		return *outcome;
+	}()};
+	return *singleton;
+}
+
+} // namespace thor

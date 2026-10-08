@@ -1,0 +1,314 @@
+#pragma once
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include <frg/tuple.hpp>
+#include <frg/vector.hpp>
+#include <thor-internal/arch/ints.hpp>
+#include <thor-internal/arch-generic/cpu-data.hpp>
+#include <thor-internal/types.hpp>
+#include <thor-internal/error.hpp>
+#include <thor-internal/kernel-stack.hpp>
+#include <initgraph.hpp>
+
+#include <thor-internal/arch-generic/asid.hpp>
+
+#include <thor-internal/arch/asm.h>
+
+// NOTE: This header only provides architecture-specific structure and
+// inline function definitions. Check arch-generic/cpu.hpp for the
+// remaining function prototypes.
+
+namespace thor {
+
+struct FpRegisters {
+	uint64_t v[64]; // V0-V31 are 128 bits
+	uint64_t fpcr;
+	uint64_t fpsr;
+};
+static_assert(offsetof(FpRegisters, v) == THOR_FPREGS_V0);
+// Note: FPSR has to follow FPCR (loaded as a pair).
+static_assert(offsetof(FpRegisters, fpcr) == THOR_FPREGS_FPCR);
+static_assert(offsetof(FpRegisters, fpsr) == THOR_FPREGS_FPSR);
+
+struct Frame {
+	uint64_t x[31];
+	uint64_t sp;
+	uint64_t elr;
+	uint64_t spsr;
+	uint64_t esr;
+	uint64_t far;
+	uint64_t tpidr_el0;
+	IplState iplState;
+};
+static_assert(offsetof(Frame, x) == THOR_FRAME_X0);
+// Note: SP has to follow X30 (loaded as a pair).
+static_assert(offsetof(Frame, sp) == THOR_FRAME_SP);
+// Note: SPSR has to follow ELR (loaded as a pair).
+static_assert(offsetof(Frame, elr) == THOR_FRAME_ELR);
+static_assert(offsetof(Frame, spsr) == THOR_FRAME_SPSR);
+// Note: FAR has to follow ESR (loaded as a pair).
+static_assert(offsetof(Frame, esr) == THOR_FRAME_ESR);
+static_assert(offsetof(Frame, far) == THOR_FRAME_FAR);
+static_assert(offsetof(Frame, tpidr_el0) == THOR_FRAME_TPIDR_EL0);
+static_assert(sizeof(Frame) == THOR_FRAME_SIZE);
+static_assert(sizeof(Frame) == 304, "Invalid exception frame size");
+
+struct ExecutorState {
+	Frame general;
+	FpRegisters fp;
+};
+// Note: Offset assumed by _restoreExecutorRegisters.
+static_assert(offsetof(ExecutorState, general) == 0);
+
+struct Executor;
+
+struct Continuation {
+	void *sp;
+};
+
+struct FaultImageAccessor;
+
+struct SyscallImageAccessor {
+	friend void saveExecutor(Executor *executor, SyscallImageAccessor accessor);
+
+	Word *number() { return &_frame()->x[0]; }
+	Word *in0() { return &_frame()->x[1]; }
+	Word *in1() { return &_frame()->x[2]; }
+	Word *in2() { return &_frame()->x[3]; }
+	Word *in3() { return &_frame()->x[4]; }
+	Word *in4() { return &_frame()->x[5]; }
+	Word *in5() { return &_frame()->x[6]; }
+	Word *in6() { return &_frame()->x[7]; }
+	Word *in7() { return &_frame()->x[8]; }
+	Word *in8() { return &_frame()->x[9]; }
+
+	Word *error() { return &_frame()->x[0]; }
+	Word *out0() { return &_frame()->x[1]; }
+	Word *out1() { return &_frame()->x[2]; }
+
+	IplState *iplState() { return &_frame()->iplState; }
+
+	void *frameBase() { return _pointer + sizeof(Frame); }
+
+private:
+	friend struct FaultImageAccessor;
+
+	SyscallImageAccessor(char *ptr)
+	: _pointer{ptr} { }
+
+	Frame *_frame() {
+		return reinterpret_cast<Frame *>(_pointer);
+	}
+
+	char *_pointer;
+};
+
+struct FaultImageAccessor {
+	friend void saveExecutor(Executor *executor, FaultImageAccessor accessor);
+
+	Word *ip() { return &_frame()->elr; }
+	Word *sp() { return &_frame()->sp; }
+
+	// TODO: this should have a different name
+	Word *rflags() { return &_frame()->spsr; }
+	Word *code() { return &_frame()->esr ; }
+
+	Word *faultAddr() { return &_frame()->far; }
+
+	IplState *iplState() { return &_frame()->iplState; }
+
+	bool inUserMode() {
+		return (_frame()->spsr & 0b1111) == 0b0000;
+	}
+
+	bool allowUserPages();
+
+	operator SyscallImageAccessor () {
+		return SyscallImageAccessor{_pointer};
+	}
+
+	void *frameBase() { return _pointer + sizeof(Frame); }
+
+private:
+	Frame *_frame() {
+		return reinterpret_cast<Frame *>(_pointer);
+	}
+
+	char *_pointer;
+};
+
+struct IrqImageAccessor {
+	friend void saveExecutor(Executor *executor, IrqImageAccessor accessor);
+
+	Word *ip() { return &_frame()->elr; }
+
+	// TODO: These are only exposed for debugging.
+	// TODO: this should have a different name
+	Word *rflags() { return &_frame()->spsr; }
+
+	IplState *iplState() { return &_frame()->iplState; }
+
+	bool intsEnabled() {
+		return (_frame()->spsr & 0x3c0) == 0x000;
+	}
+
+	bool inUserMode() {
+		return (_frame()->spsr & 0b1111) == 0b0000;
+	}
+
+	void *frameBase() { return _pointer + sizeof(Frame); }
+
+private:
+	Frame *_frame() {
+		return reinterpret_cast<Frame *>(_pointer);
+	}
+
+	char *_pointer;
+};
+
+// CpuData is some high-level struct that inherits from PlatformCpuData.
+struct CpuData;
+
+struct AbiParameters {
+	uintptr_t ip;
+	uintptr_t sp;
+	uintptr_t argument;
+};
+
+struct UserContext {
+	static void deactivate();
+
+	UserContext();
+
+	UserContext(const UserContext &other) = delete;
+
+	UserContext &operator= (const UserContext &other) = delete;
+
+	// Migrates this UserContext to a different CPU.
+	void migrate(CpuData *cpu_data);
+
+	// TODO: This should be private.
+	UniqueKernelStack kernelStack;
+};
+
+struct FiberContext {
+	FiberContext(UniqueKernelStack stack);
+
+	FiberContext(const FiberContext &other) = delete;
+
+	FiberContext &operator= (const FiberContext &other) = delete;
+
+	// TODO: This should be private.
+	UniqueKernelStack stack;
+};
+
+struct Executor;
+
+// Restores the current executor from its saved image.
+// This is functions does the heavy lifting during task switch.
+// Note: due to the attribute, this must be declared before the friend declaration below.
+[[noreturn]] void restoreExecutor(Executor *executor);
+
+struct Executor {
+	friend void saveExecutor(Executor *executor, FaultImageAccessor accessor);
+	friend void saveExecutor(Executor *executor, IrqImageAccessor accessor);
+	friend void saveExecutor(Executor *executor, SyscallImageAccessor accessor);
+	friend void restoreExecutor(Executor *executor);
+
+	static size_t determineSize() { return sizeof(ExecutorState); }
+
+	Executor();
+
+private:
+	explicit Executor(UserContext *context);
+
+public:
+	explicit Executor(UserContext *context, void (*launch)());
+	explicit Executor(UserContext *context, AbiParameters abi);
+	explicit Executor(FiberContext *context, AbiParameters abi);
+
+	Executor(const Executor &other) = delete;
+
+	~Executor();
+
+	Executor &operator= (const Executor &other) = delete;
+
+	// FIXME: remove or refactor the rdi / rflags accessors
+	// as they are platform specific and need to be abstracted here
+	Word *rflags() { return &general()->spsr; }
+
+	Word *ip() { return &general()->elr; }
+	Word *sp() { return &general()->sp; }
+	Word *cs() { return nullptr; }
+	Word *ss() { return nullptr; }
+
+	Word *arg0() { return &general()->x[1]; }
+	Word *arg1() { return &general()->x[2]; }
+	Word *result0() { return &general()->x[0]; }
+	Word *result1() { return &general()->x[1]; }
+	Word *result2() { return &general()->x[2]; }
+
+	ExecutorState *state() {
+		return reinterpret_cast<ExecutorState *>(_pointer);
+	}
+
+	Frame *general() {
+		return &state()->general;
+	}
+
+	FpRegisters *fp() {
+		return &state()->fp;
+	}
+
+	void *getExceptionStack() {
+		return _exceptionStack;
+	}
+
+	UserAccessRegion *currentUar() {
+		return _uar;
+	}
+
+private:
+	// Private function only used for the static_assert check.
+	//
+	// We can't put the static_assert outside because the members are private
+	// and we can't put it at the end of the struct body because the type
+	// is incomplete at that point.
+	static void staticChecks() {
+		static_assert(offsetof(Executor, _pointer) == THOR_EXECUTOR_IMAGE);
+		static_assert(offsetof(Executor, _uar) == THOR_EXECUTOR_UAR);
+	}
+
+	char *_pointer;
+	void *_exceptionStack;
+	UserAccessRegion *_uar{nullptr};
+};
+
+// Determine whether this address belongs to the higher half.
+inline constexpr bool inHigherHalf(uintptr_t address) {
+	return address & (static_cast<uintptr_t>(1) << 63);
+}
+
+void initializeThisProcessor();
+
+extern "C" void saveFpSimdRegisters(FpRegisters *frame);
+
+// Save the current SIMD register state into the given executor.
+inline void saveCurrentSimdState(Executor *executor) {
+	saveFpSimdRegisters(executor->fp());
+}
+
+void setupBootCpuContext();
+
+void setupCpuContext(AssemblyCpuData *context);
+
+initgraph::Stage *getBootProcessorReadyStage();
+
+struct CpuData;
+void prepareCpuDataFor(CpuData *context, int cpu);
+
+uint32_t affinityFromMpidr(uint64_t mpidr);
+
+} // namespace thor

@@ -1,0 +1,99 @@
+namespace "managarm::kerncfg";
+
+enum Error {
+	SUCCESS = 0,
+	ILLEGAL_REQUEST = 1,
+	WOULD_BLOCK = 2
+}
+
+message GetCmdlineRequest 1 {
+head(128):
+}
+
+consts GetBufferContentsFlags uint64 {
+	// Only retrieve a single record instead of filling up the buffer
+	ONE_RECORD = 1,
+	// Do not wait for the buffer to be filled, return WOULD_BLOCK instead
+	NO_WAIT = 2
+}
+
+message GetBufferContentsRequest 2 {
+head(128):
+	uint64 watermark;
+	uint64 size;
+	uint64 dequeue;
+	uint64 flags;
+}
+
+message SvrResponse 3 {
+head(128):
+	Error error;
+
+	tags {
+		tag(1) uint64 size;
+		tag(2) uint64 effective_dequeue;
+		tag(3) uint64 new_dequeue;
+	}
+}
+
+message GetMemoryInformationRequest 4 {
+head(128):
+}
+
+message GetMemoryInformationResponse 5 {
+head(128):
+	Error error;
+	uint64 total_usable_memory;
+	uint64 available_memory;
+	uint64 memory_unit;
+}
+
+message GetNumCpuRequest 6 {
+head(128):
+}
+
+message GetNumCpuResponse 7 {
+head(128):
+	Error error;
+	uint64 num_cpu;
+}
+
+message GetAcpiRsdpRequest 8 {
+head(128):
+}
+
+message GetAcpiRsdpResponse 9 {
+head(128):
+	Error error;
+	uint64 rsdp;
+}
+
+message GetDeviceTreeRequest 10 {
+head(128):
+}
+
+message GetDeviceTreeResponse 11 {
+head(128):
+	Error error;
+	uint64 address;
+	uint64 size;
+}
+
+struct HierarchyNode {
+	uint64 id;
+	uint64 parent_id;
+	uint64 charged_memory;
+	uint64 charged_swap;
+	string tag;
+}
+
+message GetHierarchyRequest 12 {
+head(128):
+}
+
+message GetHierarchyResponse 13 {
+head(128):
+	Error error;
+tail:
+	HierarchyNode[] nodes;
+}

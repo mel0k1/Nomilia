@@ -1,0 +1,56 @@
+#pragma once
+
+#include <arch/mem_space.hpp>
+#include <async/result.hpp>
+#include <helix/memory.hpp>
+#include <protocols/hw/client.hpp>
+
+#include "port.hpp"
+
+class Controller {
+
+public:
+	Controller(
+	    int64_t parentId,
+	    protocols::hw::Device hwDevice,
+	    helix::Mapping hbaRegs,
+	    helix::UniqueDescriptor irq,
+	    bool useMsis,
+	    helix::UniqueDescriptor dmaSpace,
+		bool iommuActive
+	);
+
+	async::detached run();
+
+	arch::contiguous_pool &pool() {
+		return pool_;
+	}
+
+	arch::dma_space &dmaSpace() {
+		return dmaSpace_;
+	}
+
+private:
+	async::result<bool> initPorts_(size_t numCommandSlots, bool staggeredSpinUp);
+	async::detached handleIrqs_();
+	void dumpState_();
+
+private:
+	protocols::hw::Device hwDevice_;
+	helix::Mapping regsMapping_;
+	arch::mem_space regs_;
+	helix::UniqueDescriptor irq_;
+
+	arch::dma_realm dmaRealm_;
+	arch::contiguous_pool pool_{&dmaRealm_, {.addressBits = 32}};
+	helix::UniqueDescriptor dmaSpaceHandle_;
+	arch::dma_space dmaSpace_;
+
+	std::vector<std::unique_ptr<Port>> activePorts_;
+
+	int64_t parentId_;
+	uint32_t portsImpl_;
+	uint64_t irqSequence_;
+	int maxPorts_;
+	bool useMsis_;
+};

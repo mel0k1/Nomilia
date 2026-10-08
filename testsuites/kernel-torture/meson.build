@@ -1,0 +1,6 @@
+src = [
+	'src/main.cpp',
+	'src/cow.cpp',
+]
+
+executable('kernel-torture', src, install : true, dependencies: [ helix_dep, core_dep ])

@@ -1,0 +1,194 @@
+#pragma once
+
+#include <frg/container_of.hpp>
+#include <thor-internal/arch-generic/cpu.hpp>
+#include <thor-internal/cpu-data.hpp>
+#include <thor-internal/schedule.hpp>
+#include <thor-internal/work-queue.hpp>
+#include <initgraph.hpp>
+
+namespace thor {
+
+// Once this stage is reached, the kernel can launch fibers.
+// (Even though they do not necessarily start yet.)
+initgraph::Stage *getFibersAvailableStage();
+
+struct KernelFiber;
+
+KernelFiber *thisFiber();
+
+struct FiberBlocker {
+	friend struct KernelFiber;
+
+	void setup();
+
+private:
+	KernelFiber *_fiber;
+	bool _done;
+};
+
+struct KernelFiber final : ScheduleEntity {
+private:
+	struct AssociatedWorkQueue final : WorkQueue {
+		AssociatedWorkQueue(KernelFiber *fiber)
+		: WorkQueue{fiber->_executorContext, ipl::exceptionalWork}, fiber_{fiber} { }
+
+		void wakeup() override;
+
+	private:
+		KernelFiber *fiber_;
+	};
+
+public:
+	static void blockCurrent(FiberBlocker *blocker);
+
+	template<typename Sender>
+	static auto asyncBlockCurrent(Sender s) {
+		return asyncBlockCurrent(std::move(s), thisFiber()->associatedWorkQueue().get());
+	}
+
+	template<typename Sender>
+	requires std::is_same_v<typename Sender::value_type, void>
+	static void asyncBlockCurrent(Sender s, WorkQueue *wq) {
+		if (wq) {
+			assert(currentIpl() < wq->wqIpl());
+		} else {
+			assert(currentIpl() < ipl::noSchedule);
+		}
+
+		struct Closure {
+			FiberBlocker blocker;
+			WorkQueue *wq;
+		} closure{.wq = wq};
+
+		struct Env {
+			WorkQueue *get_work_queue() {
+				return closure->wq;
+			}
+
+			Closure *closure;
+		};
+
+		struct Receiver {
+			void set_value_inline() {
+				// Do nothing (there is no value to store).
+			}
+
+			void set_value_noinline() {
+				KernelFiber::unblockOther(&closure->blocker);
+			}
+
+			auto get_env() {
+				return Env{.closure = closure};
+			}
+
+			Closure *closure;
+		};
+
+		closure.blocker.setup();
+		auto operation = async::execution::connect(std::move(s), Receiver{&closure});
+		if(async::execution::start_inline(operation))
+			return;
+		KernelFiber::blockCurrent(&closure.blocker);
+	}
+
+	template<typename Sender>
+	requires (!std::is_same_v<typename Sender::value_type, void>)
+	static typename Sender::value_type asyncBlockCurrent(Sender s) {
+		assert(currentIpl() < ipl::exceptionalWork);
+
+		struct Closure {
+			frg::optional<typename Sender::value_type> value;
+			FiberBlocker blocker;
+			WorkQueue *wq;
+		} closure{.wq = thisFiber()->associatedWorkQueue().get()};
+
+		struct Env {
+			WorkQueue *get_work_queue() {
+				return closure->wq;
+			}
+
+			Closure *closure;
+		};
+
+		struct Receiver {
+			void set_value_inline(typename Sender::value_type value) {
+				closure->value.emplace(std::move(value));
+			}
+
+			void set_value_noinline(typename Sender::value_type value) {
+				closure->value.emplace(std::move(value));
+				KernelFiber::unblockOther(&closure->blocker);
+			}
+
+			auto get_env() {
+				return Env{.closure = closure};
+			}
+
+			Closure *closure;
+		};
+
+		closure.blocker.setup();
+		auto operation = async::execution::connect(std::move(s), Receiver{&closure});
+		if(async::execution::start_inline(operation))
+			return std::move(*closure.value);
+		KernelFiber::blockCurrent(&closure.blocker);
+		return std::move(*closure.value);
+	}
+
+	static void exitCurrent();
+
+	static void unblockOther(FiberBlocker *blocker);
+
+	template<typename F>
+	static void run(F functor, Scheduler *scheduler = &localScheduler.get()) {
+		auto frame = [] (void *argument) {
+			auto object = reinterpret_cast<F *>(argument);
+			(*object)();
+			exitCurrent();
+		};
+		auto stack = UniqueKernelStack::make();
+		auto target = stack.embed<F>(functor);
+		run(std::move(stack), frame, target, scheduler);
+	}
+
+	template<typename F>
+	static KernelFiber *post(F functor, Scheduler *scheduler = &localScheduler.get()) {
+		auto frame = [] (void *argument) {
+			auto object = reinterpret_cast<F *>(argument);
+			(*object)();
+			exitCurrent();
+		};
+		auto stack = UniqueKernelStack::make();
+		auto target = stack.embed<F>(functor);
+		return post(std::move(stack), frame, target, scheduler);
+	}
+
+	static void run(UniqueKernelStack stack, void (*function)(void *), void *argument, Scheduler* = &localScheduler.get());
+	static KernelFiber *post(UniqueKernelStack stack, void (*function)(void *), void *argument, Scheduler* = &localScheduler.get());
+
+	explicit KernelFiber(UniqueKernelStack stack, AbiParameters abi);
+	~KernelFiber();
+
+	[[ noreturn ]] void invoke() override;
+
+	void handlePreemption() override;
+	void handlePreemption(IrqImageAccessor) override;
+
+	smarter::borrowed_ptr<WorkQueue> associatedWorkQueue() {
+		return _associatedWorkQueue;
+	}
+
+private:
+	frg::ticket_spinlock _mutex;
+	bool _blocked;
+
+	// Used by the AssociatedWorkQueue below so must be initialized before.
+	ExecutorContext *_executorContext{ExecutorContext::create()};
+
+	smarter::shared_ptr<AssociatedWorkQueue> _associatedWorkQueue;
+	FiberContext _fiberContext;
+	Executor _executor;
+};
+
+} // namespace thor

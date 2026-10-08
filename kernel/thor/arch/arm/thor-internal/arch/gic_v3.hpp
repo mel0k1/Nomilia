@@ -1,0 +1,98 @@
+#pragma once
+
+#include <thor-internal/arch/gic.hpp>
+#include <frg/manual_box.hpp>
+#include <frg/span.hpp>
+
+namespace thor {
+
+struct GicRedistributorRange {
+	uintptr_t address;
+	size_t size;
+};
+
+struct GicDistributorV3;
+
+struct GicDistributorV3 {
+	friend struct GicPinV3;
+
+	GicDistributorV3(uintptr_t addr, uintptr_t size);
+
+	void init();
+
+	frg::string<KernelAlloc> buildPinName(uint32_t irq);
+
+private:
+	friend struct GicV3;
+	friend struct GicPinV3;
+
+	uintptr_t base_;
+	arch::mem_space space_;
+};
+
+struct GicRedistributorV3 {
+	constexpr GicRedistributorV3() : space_{} {}
+	GicRedistributorV3(arch::mem_space space);
+
+	void initOnThisCpu();
+	bool ownedBy(uint32_t affinity) const;
+
+private:
+	friend struct GicPinV3;
+
+	arch::mem_space space_;
+};
+
+struct GicPinV3 : public Gic::Pin {
+	GicPinV3(GicDistributorV3 *dist, uint32_t irq)
+		: Gic::Pin {dist->buildPinName(irq)}, irq_ {irq} {}
+
+	bool setMode(TriggerMode trigger) override;
+
+	IrqStrategy program(TriggerMode mode, Polarity polarity) override;
+
+	void mask() override;
+	void unmask() override;
+
+	void endOfInterrupt() override;
+
+private:
+	friend struct GicV3;
+	friend void initGicOnThisCpuV3();
+
+	void setAffinity_(uint32_t affinity);
+	void setPriority_(uint8_t priority);
+
+	uint32_t irq_;
+};
+
+struct GicV3 : public Gic {
+	GicV3();
+
+	void sendIpi(int cpuId, uint8_t id);
+	// Returns the number of CPUs that the SGI is sent to.
+	size_t sendIpi(const frg::dyn_bitset<KernelAlloc> &targets, uint8_t id);
+	size_t sendIpiToOthers(uint8_t id);
+
+	CpuIrq getIrq();
+	void eoi(uint32_t cpuId, uint32_t id);
+
+	smarter::shared_ptr<Pin> setupIrq(uint32_t irq, TriggerMode trigger) override;
+	smarter::shared_ptr<Pin> getPin(uint32_t irq) override;
+	uint32_t irqCount() override;
+
+private:
+	void sendSgi_(uint32_t affinity, uint16_t targetList, uint8_t id);
+
+	frg::vector<smarter::shared_ptr<GicPinV3>, KernelAlloc> irqPins_;
+};
+
+bool initGicV3();
+bool initGicV3FromAcpi(
+    uintptr_t distributor,
+    size_t distributorSize,
+    frg::span<const GicRedistributorRange> redistributorRanges
+);
+void initGicOnThisCpuV3();
+
+}

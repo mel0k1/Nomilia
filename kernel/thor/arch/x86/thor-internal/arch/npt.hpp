@@ -1,0 +1,93 @@
+#pragma once
+
+#include <thor-internal/arch-generic/paging.hpp>
+#include <thor-internal/error.hpp>
+#include <thor-internal/physical.hpp>
+#include <thor-internal/rcu.hpp>
+#include <thor-internal/virtualization.hpp>
+
+namespace thor::svm {
+
+struct NptPageSpace : PageSpace {
+	NptPageSpace(PhysicalAddr root);
+
+	NptPageSpace(const NptPageSpace &) = delete;
+
+	~NptPageSpace();
+
+	NptPageSpace &operator= (const NptPageSpace &) = delete;
+};
+
+struct NptOperations final : VirtualOperations {
+	NptOperations(NptPageSpace *pageSpace);
+
+	void retire(RetireNode *node) override;
+
+	bool submitShootdown(ShootNode *node) override;
+
+	frg::expected<Error, PagesAffected> mapPresentPages(VirtualAddr va, MemoryView *view,
+			uintptr_t offset, size_t size, PageFlags flags, CachingMode mode,
+			RevokeBatch &batch) override;
+
+	frg::expected<Error, PagesAffected> restrictPages(VirtualAddr va,
+			size_t size, PageFlags flags, RevokeBatch &batch) override;
+
+	frg::expected<Error, PagesAffected> faultPage(VirtualAddr va, MemoryView *view,
+			uintptr_t offset, FetchFlags fetchFlags, PageFlags flags, CachingMode mode,
+			RevokeBatch &batch) override;
+
+	frg::expected<Error, PagesAffected> cleanPages(VirtualAddr va, size_t size,
+			RevokeBatch &batch) override;
+
+	frg::expected<Error, PagesAffected> unmapPages(VirtualAddr va, size_t size,
+			RevokeBatch &batch) override;
+
+	frg::expected<Error, PagesAffected> agePages(VirtualAddr va, size_t size, bool vacate,
+			RevokeBatch &batch) override;
+
+private:
+	NptPageSpace *pageSpace_;
+};
+
+} // namespace thor::svm
+
+namespace thor::svm {
+	struct NptSpace final : VirtualizedPageSpace {
+		friend struct ShootNode;
+		friend struct Vcpu;
+
+	private:
+		struct CtorToken {};
+
+	public:
+		NptSpace(CtorToken, PhysicalAddr root);
+
+		NptSpace(const NptSpace &) = delete;
+
+		~NptSpace();
+
+		NptSpace& operator=(const NptSpace &) = delete;
+
+		static std::expected<smarter::shared_ptr<NptSpace>, Error> create() {
+			PhysicalAddr root = physicalAllocator->allocate(kPageSize);
+			if(root == static_cast<PhysicalAddr>(-1))
+				return std::unexpected{Error::noMemory};
+			PageAccessor accessor{root};
+			memset(accessor.get(), 0, kPageSize);
+
+			auto ptr = allocate_rcu_shared<NptSpace>(Allocator{}, CtorToken{}, root);
+			ptr->selfPtr = ptr;
+			ptr->setupInitialHole(0, 0x7ffffff00000);
+			return ptr;
+		}
+
+		PhysicalAddr rootTable() {
+			return pageSpace_.rootTable();
+		}
+
+	private:
+		NptOperations nptOps_;
+		NptPageSpace pageSpace_;
+		frg::ticket_spinlock _mutex;
+	};
+} // namespace thor::svm

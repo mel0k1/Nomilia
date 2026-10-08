@@ -1,0 +1,1051 @@
+namespace "managarm::fs";
+
+enum Errors {
+	SUCCESS = 0,
+	FILE_NOT_FOUND = 1,
+	END_OF_FILE = 2,
+	ILLEGAL_ARGUMENT = 4,
+	WOULD_BLOCK = 5,
+	SEEK_ON_PIPE = 6,
+	BROKEN_PIPE = 7,
+	ACCESS_DENIED = 8,
+	AF_NOT_SUPPORTED = 9,
+	DESTINATION_ADDRESS_REQUIRED = 10,
+	NETWORK_UNREACHABLE = 11,
+	MESSAGE_TOO_LARGE = 12,
+	HOST_UNREACHABLE = 13,
+	INSUFFICIENT_PERMISSIONS = 14,
+	ADDRESS_IN_USE = 15,
+	ADDRESS_NOT_AVAILABLE = 16,
+	NOT_CONNECTED = 17,
+	ALREADY_EXISTS = 18,
+	ILLEGAL_OPERATION_TARGET = 19,
+	NOT_DIRECTORY = 20,
+	NO_SPACE_LEFT = 21,
+	NOT_A_TERMINAL = 22,
+	NO_BACKING_DEVICE = 23,
+	IS_DIRECTORY = 24,
+	INVALID_PROTOCOL_OPTION = 25,
+	DIRECTORY_NOT_EMPTY = 26,
+	CONNECTION_REFUSED = 27,
+	INTERNAL_ERROR = 28,
+	ALREADY_CONNECTED = 29,
+	NOT_A_SOCKET = 30,
+	INTERRUPTED = 31,
+	NO_SUCH_PROCESS = 32,
+	NAME_TOO_LONG = 33,
+	NO_FILE_DESCRIPTORS_AVAILABLE = 34,
+	NOT_SUPPORTED = 35,
+	BAD_FILE_DESCRIPTOR = 36
+}
+
+consts FileType int64 {
+	REGULAR = 1,
+	DIRECTORY = 2,
+	SYMLINK = 3,
+	SOCKET = 4,
+	CHAR_DEVICE = 5,
+	BLOCK_DEVICE = 6,
+	FIFO = 7
+}
+
+enum Command {
+	TTY_GET_ATTR = 1,
+	TTY_SET_ATTR = 2
+}
+
+consts OpenFlags uint32 {
+	OF_NONBLOCK = 1
+}
+
+consts FlockFlags uint32 {
+	LOCK_SH = 1,
+	LOCK_EX = 2,
+	LOCK_NB = 4,
+	LOCK_UN = 8
+}
+
+consts FileCaps uint32 {
+	FC_STATUS_PAGE = 1,
+	FC_POSIX_LANE = 2
+}
+
+consts MountCaps uint64 {
+	// The server never modifies directory entries on its own:
+	// all directory entry mutations originate from requests sent by the client.
+	// Allows the client to cache the directory hierarchy.
+	MC_CLIENT_EXCLUSIVE_NAMESPACE = 1,
+	// The server implements NodeTraverseLinksRequest and ObstructLinkRequest.
+	// Without it, the client resolves paths component by component.
+	MC_TRAVERSE_LINKS = 2
+}
+
+enum CntReqType {
+	NONE = 0,
+
+	// Device API.
+	DEV_OPEN = 14,
+
+	SB_CREATE_REGULAR = 27,
+
+	// File node API.
+	NODE_GET_STATS = 5,
+	NODE_SYMLINK = 39,
+	NODE_READ_SYMLINK = 15,
+
+	// Primary file API.
+	FILE_POLL_STATUS = 46,
+
+	// File passthrough API.
+	// TODO: Add a PT_ prefix to those requests.
+	PT_BIND = 21,
+	PT_LISTEN = 23,
+	PT_CONNECT = 22,
+	PT_SOCKNAME = 24,
+	PT_GET_FILE_FLAGS = 30,
+	PT_SET_FILE_FLAGS = 31,
+	PT_PEERNAME = 42,
+
+	SEEK_ABS = 6,
+	SEEK_REL = 7,
+	SEEK_EOF = 8,
+
+	// Socket API
+	CREATE_SOCKET = 32,
+
+	// Legacy API.
+	MMAP = 9,
+
+	FLOCK = 73,
+
+	NODE_CHMOD = 38,
+
+	OPEN_FD_LANE = 47,
+	PT_GET_SEALS = 48,
+	PT_ADD_SEALS = 49
+}
+
+struct Rect {
+	int32 x1;
+	int32 y1;
+	int32 x2;
+	int32 y2;
+}
+
+message CntRequest 1 {
+head(128):
+	CntReqType req_type;
+
+	tags {
+		// used by SOCKET_CREATE
+		tag(49) int64 type;
+		tag(50) int64 protocol;
+		tag(59) int64 domain;
+
+		// used by DEV_OPEN
+		tag(39) uint32 flags;
+
+		// used by FSTAT, SEEK_ABS, SEEK_REL, SEEK_EOF, MMAP and CLOSE
+		tag(4) int32 fd;
+
+		// used by PT_BIND, PT_CONNECT, PT_SOCKNAME and PT_PEERNAME for socket addresses
+		tag(5) int32 size;
+
+		// used by RECVMSG
+		tag(51) uint64 addr_size;
+		tag(52) uint64 ctrl_size;
+
+		// used by NODE_SYMLINK
+		tag(61) uint32 name_length;
+		tag(62) uint32 target_length;
+
+		// used by SEEK_ABS, SEEK_REL and SEEK_EOF
+		tag(7) int64 rel_offset;
+
+		// used by PT_IOCTL, PT_SET_OPTION.
+		tag(8) int64 command;
+
+		//used by FLOCK
+		tag(9) int32 flock_flags;
+
+		// Sequence number for FILE_POLL_WAIT / FILE_POLL_STATUS.
+		tag(38) uint64 sequence;
+		tag(48) uint32 event_mask;
+
+		// PTS and TTY ioctls.
+		tag(43) int32 pts_width;
+		tag(44) int32 pts_height;
+		tag(45) int32 pts_pixel_width;
+		tag(46) int32 pts_pixel_height;
+
+		// DRM ioctls.
+		tag(18) uint64 drm_capability;
+
+		tag(19) uint32 drm_connector_id;
+
+		tag(20) uint32 drm_encoder_id;
+
+		tag(47) uint32 drm_max_modes;
+
+		tag(21) uint32 drm_height;
+		tag(22) uint32 drm_width;
+		tag(23) uint32 drm_bpp;
+		tag(24) uint32 drm_flags;
+
+		tag(25) uint32 drm_pitch;
+		tag(26) uint32 drm_depth;
+
+		tag(27) uint32 drm_handle;
+
+		tag(28) uint32 drm_crtc_id;
+
+		tag(73) uint32 drm_plane_id;
+
+		tag(29) uint32[] drm_connector_ids;
+		tag(30) uint32 drm_x;
+		tag(31) uint32 drm_y;
+		tag(33) uint32 drm_fb_id;
+		tag(34) uint32 drm_mode_valid;
+
+		tag(70) uint32 drm_obj_id;
+		tag(71) uint32 drm_obj_type;
+		tag(72) uint32 drm_count_props;
+
+		tag(74) uint32 drm_property_id;
+		tag(76) uint64 drm_property_value;
+
+		tag(75) uint32 drm_blob_id;
+		tag(77) uint32 drm_blob_size;
+
+		tag(78) uint32[] drm_obj_ids;
+		tag(79) uint32[] drm_prop_counts;
+		tag(80) uint32[] drm_props;
+		tag(81) uint64[] drm_prop_values;
+
+		tag(35) uint32 drm_color;
+		tag(36) Rect[] drm_clips;
+
+		tag(37) uint64 drm_cookie;
+
+		tag(82) uint32 drm_prime_handle;
+
+		tag(40) int32 input_type;
+		tag(41) int32 input_clock;
+
+		tag(58) int64 offset;
+
+		tag(60) int32 mode;
+
+		// used by PT_IOCTL for TIOCSPGRP
+		tag(69) int64 pgid;
+
+		tag(84) int32 seals;
+
+		// used by SB_CREATE_REGULAR
+		tag(86) int64 uid;
+		tag(87) int64 gid;
+
+		tag(88) uint64 cancellation_id;
+	}
+}
+
+message SvrResponse 2 {
+head(128):
+	Errors error;
+
+	tags {
+		// returned by FSTAT and OPEN
+		tag(5) FileType file_type;
+
+		// returned by NODE_GET_LINK
+		tag(18) int64 id;
+
+		// Directory mutation serial that enables client name caches to detect lookup <-> mutation races.
+		// Every mutation of a directory's entries advances a per-superblock counter
+		// (starting at one) and records the new value as that directory's serial.
+		// A lookup reports the current serial of the directory.
+		// A mutation reports the serial that it assigned, or zero if it did not touch any directory.
+		// Note that this also applies to error responses: a request that fails after it
+		// already mutated a directory must still report a serial.
+		tag(98) uint64 serial;
+
+		// returned by FSTAT
+		tag(4) uint64 file_size;
+
+		// returned by FSTAT
+		tag(13) int32 mode;
+
+		tag(64) uint32 caps;
+
+		// returned by FSTAT
+		tag(14) uint64 inode_num;
+
+		// returned by FSTAT
+		tag(17) uint64 num_links;
+
+		// returned by FSTAT
+		tag(15) int64 uid;
+		tag(16) int64 gid;
+
+		// returned by FSTAT
+		tag(7) int64 atime_secs;
+		tag(8) int64 atime_nanos;
+		tag(9) int64 mtime_secs;
+		tag(10) int64 mtime_nanos;
+		tag(11) int64 ctime_secs;
+		tag(12) int64 ctime_nanos;
+
+		// returned by OPEN
+		tag(1) int32 fd;
+
+		// returned by SEEK_ABS, SEEK_REL and SEEK_EOF
+		tag(6) uint64 offset;
+
+		// returned by PT_IOCTL
+		tag(20) uint64 result;
+
+		// Sequence number for FILE_POLL_WAIT / FILE_POLL_STATUS.
+		tag(60) uint64 sequence;
+
+		// Event edges / current events for FILE_POLL_WAIT / FILE_POLL_STATUS.
+		tag(62) int32 status;
+
+		tag(71) int64 pid;
+
+		// returned by PT_SENDMSG
+		tag(76) int64 size;
+
+		// PTS and TTY ioctls.
+		tag(63) int32 pts_index;
+		tag(72) int32 pts_width;
+		tag(73) int32 pts_height;
+		tag(74) int32 pts_pixel_width;
+		tag(75) int32 pts_pixel_height;
+
+		// DRM ioctls.
+		tag(21) uint64 drm_value;
+
+		tag(22) uint32[] drm_fb_ids;
+		tag(23) uint32[] drm_crtc_ids;
+		tag(24) uint32[] drm_connector_ids;
+		tag(25) uint32[] drm_encoder_ids;
+		tag(26) int32 drm_min_width;
+		tag(27) int32 drm_max_width;
+		tag(28) int32 drm_min_height;
+		tag(29) int32 drm_max_height;
+
+		tag(30) uint32[] drm_encoders;
+		tag(32) uint32 drm_encoder_id;
+		tag(33) uint32 drm_connector_type;
+		tag(34) uint32 drm_connector_type_id;
+		tag(35) uint32 drm_connection;
+		tag(36) uint32 drm_mm_width;
+		tag(37) uint32 drm_mm_height;
+		tag(38) uint32 drm_subpixel;
+
+		tag(39) uint32 drm_encoder_type;
+		tag(40) uint32 drm_crtc_id;
+		tag(41) uint32 drm_possible_crtcs;
+		tag(42) uint32 drm_possible_clones;
+
+		tag(43) uint32 drm_handle;
+		tag(44) uint32 drm_pitch;
+		tag(45) uint64 drm_size;
+
+		tag(46) uint32 drm_fb_id;
+
+		tag(47) uint64 drm_offset;
+
+		tag(48) uint32 drm_x;
+		tag(49) uint32 drm_y;
+		tag(50) uint32 drm_gamma_size;
+		tag(51) uint32 drm_mode_valid;
+
+		tag(53) uint32 drm_num_modes;
+
+		tag(54) uint32 drm_version_major;
+		tag(55) uint32 drm_version_minor;
+		tag(56) uint32 drm_version_patchlevel;
+		tag(57) string drm_driver_name;
+		tag(58) string drm_driver_date;
+		tag(59) string drm_driver_desc;
+
+		tag(81) uint32 drm_count_props;
+
+		tag(82) uint32[] drm_obj_property_ids;
+		tag(83) uint64[] drm_obj_property_values;
+
+		tag(84) uint8[] drm_property_blob;
+
+		tag(85) uint32[] drm_plane_res;
+
+		tag(86) string drm_property_name;
+		tag(88) uint64[] drm_property_vals;
+		tag(89) uint32 drm_property_flags;
+
+		tag(90) uint32 drm_format_types;
+
+		tag(91) uint64[] drm_enum_value;
+		tag(92) string[] drm_enum_name;
+
+		tag(93) uint32 drm_blob_id;
+		tag(95) uint32 drm_prime_fd;
+		tag(96) uint32 drm_prime_handle;
+
+		tag(65) int32 input_value;
+		tag(66) int32 input_min;
+		tag(67) int32 input_max;
+		tag(68) int32 input_fuzz;
+		tag(69) int32 input_flat;
+		tag(70) int32 input_resolution;
+
+		tag(77) int32 flags;
+
+		// returned by FIONREAD
+		tag(94) uint32 fionread_count;
+
+		tag(97) int32 seals;
+	}
+}
+
+message RenameRequest 3 {
+head(128):
+	uint64 inode_source;
+	uint64 inode_target;
+tail:
+	string old_name;
+	string new_name;
+}
+
+message NodeTraverseLinksRequest 4 {
+head(128):
+tail:
+	string[] path_segments;
+}
+
+message NodeTraverseLinksResponse 5 {
+head(128):
+	Errors error;
+	uint64 links_traversed;
+	FileType file_type;
+	// On FILE_NOT_FOUND: serial of the directory in which the lookup failed.
+	uint64 serial;
+tail:
+	int64[] ids;
+	// Serial of the directory that each entry of ids was resolved in.
+	uint64[] serials;
+}
+
+message RecvMsgRequest 6 {
+head(128):
+	int32 size;
+	@format(hex) uint32 flags;
+	uint64 ctrl_size;
+	uint64 addr_size;
+}
+
+message RecvMsgReply 7 {
+head(128):
+	Errors error;
+	int64 addr_size;
+	int64 ret_val;
+	uint32 flags;
+}
+
+message SendMsgRequest 8 {
+head(128):
+	int32 size;
+	uint32 flags;
+	byte has_cmsg_rights;
+	byte has_cmsg_creds;
+	int32 creds_pid;
+	uint32 creds_uid;
+	uint32 creds_gid;
+tail:
+	uint32[] fds;
+}
+
+message SendMsgReply 9 {
+head(128):
+	Errors error;
+	uint64 size;
+}
+
+message IoctlRequest 10 {
+head(128):
+}
+
+message GenericIoctlRequest 11 {
+head(128):
+	tags {
+		tag(1) int32 size;
+		tag(2) @format(hex) uint64 command;
+
+		// PTS and TTY ioctls.
+		tag(3) int32 pts_width;
+		tag(4) int32 pts_height;
+		tag(5) int32 pts_pixel_width;
+		tag(6) int32 pts_pixel_height;
+
+		// DRM ioctls.
+		tag(7) uint64 drm_capability;
+
+		tag(8) uint32 drm_connector_id;
+
+		tag(9) uint32 drm_encoder_id;
+
+		tag(10) uint32 drm_max_modes;
+
+		tag(11) uint32 drm_height;
+		tag(12) uint32 drm_width;
+		tag(13) uint32 drm_bpp;
+		tag(14) uint32 drm_flags;
+
+		tag(15) uint32 drm_pitch;
+		tag(16) uint32 drm_depth;
+		tag(43) uint32 drm_fourcc;
+		tag(45) uint32 drm_modifier;
+
+		tag(17) uint32 drm_handle;
+
+		tag(18) uint32 drm_crtc_id;
+
+		tag(19) uint32 drm_plane_id;
+
+		tag(20) uint32[] drm_connector_ids;
+		tag(21) uint32 drm_x;
+		tag(22) uint32 drm_y;
+		tag(23) uint32 drm_fb_id;
+		tag(24) uint32 drm_mode_valid;
+
+		tag(25) uint32 drm_obj_id;
+		tag(26) uint32 drm_obj_type;
+		tag(27) uint32 drm_count_props;
+
+		tag(28) uint32 drm_property_id;
+		tag(29) uint64 drm_property_value;
+
+		tag(30) uint32 drm_blob_id;
+		tag(31) uint32 drm_blob_size;
+
+		tag(32) uint32[] drm_obj_ids;
+		tag(33) uint32[] drm_prop_counts;
+		tag(34) uint32[] drm_props;
+		tag(35) uint64[] drm_prop_values;
+
+		tag(36) uint32 drm_color;
+		tag(37) Rect[] drm_clips;
+
+		tag(38) uint64 drm_cookie;
+
+		tag(39) uint32 drm_prime_handle;
+
+		tag(44) uint32 drm_format_types;
+
+		tag(40) int32 input_type;
+		tag(41) int32 input_clock;
+
+		// used by PT_IOCTL for TIOCSPGRP
+		tag(42) int64 pgid;
+
+		tag(46) uint64 ticks;
+
+		tag(47) int32 snd_pcm_prefer_subdevice;
+		tag(48) int32 snd_pcm_user_pversion;
+		tag(49) int32 snd_pcm_ttstamp;
+		tag(50) uint64 snd_pcm_frames;
+		tag(51) int32 snd_device;
+	}
+}
+
+message GenericIoctlReply 12 {
+head(128):
+	Errors error;
+
+	tags {
+		// returned by PT_IOCTL
+		tag(1) uint64 result;
+
+		// PTS and TTY ioctls.
+		tag(2) int32 pts_index;
+		tag(3) int32 pts_width;
+		tag(4) int32 pts_height;
+		tag(5) int32 pts_pixel_width;
+		tag(6) int32 pts_pixel_height;
+
+		// DRM ioctls.
+		tag(7) uint64 drm_value;
+
+		tag(8) uint32[] drm_fb_ids;
+		tag(9) uint32[] drm_crtc_ids;
+		tag(10) uint32[] drm_connector_ids;
+		tag(11) uint32[] drm_encoder_ids;
+		tag(12) int32 drm_min_width;
+		tag(13) int32 drm_max_width;
+		tag(14) int32 drm_min_height;
+		tag(15) int32 drm_max_height;
+
+		tag(16) uint32[] drm_encoders;
+		tag(17) uint32 drm_encoder_id;
+		tag(18) uint32 drm_connector_type;
+		tag(19) uint32 drm_connector_type_id;
+		tag(20) uint32 drm_connection;
+		tag(21) uint32 drm_mm_width;
+		tag(22) uint32 drm_mm_height;
+		tag(23) uint32 drm_subpixel;
+
+		tag(24) uint32 drm_encoder_type;
+		tag(25) uint32 drm_crtc_id;
+		tag(26) uint32 drm_possible_crtcs;
+		tag(27) uint32 drm_possible_clones;
+
+		tag(28) uint32 drm_handle;
+		tag(29) uint32 drm_pitch;
+		tag(30) uint64 drm_size;
+
+		tag(31) uint32 drm_fb_id;
+
+		tag(32) uint64 drm_offset;
+
+		tag(33) uint32 drm_x;
+		tag(34) uint32 drm_y;
+		tag(35) uint32 drm_gamma_size;
+		tag(36) uint32 drm_mode_valid;
+
+		tag(37) uint32 drm_num_modes;
+
+		tag(38) uint32 drm_version_major;
+		tag(39) uint32 drm_version_minor;
+		tag(40) uint32 drm_version_patchlevel;
+		tag(41) string drm_driver_name;
+		tag(42) string drm_driver_date;
+		tag(43) string drm_driver_desc;
+
+		tag(44) uint32 drm_count_props;
+
+		tag(45) uint32[] drm_obj_property_ids;
+		tag(46) uint32[] drm_obj_property_values;
+
+		tag(47) uint32 drm_property_blob_size;
+
+		tag(48) uint32[] drm_plane_res;
+
+		tag(49) string drm_property_name;
+		tag(50) uint64[] drm_property_vals;
+		tag(51) uint32 drm_property_flags;
+
+		tag(52) uint32 drm_format_types;
+
+		tag(53) uint64[] drm_enum_value;
+		tag(54) string[] drm_enum_name;
+
+		tag(55) uint32 drm_blob_id;
+		tag(56) uint32 drm_prime_fd;
+		tag(57) uint32 drm_prime_handle;
+
+		tag(58) int32 input_value;
+		tag(59) int32 input_min;
+		tag(60) int32 input_max;
+		tag(61) int32 input_fuzz;
+		tag(62) int32 input_flat;
+		tag(63) int32 input_resolution;
+
+		tag(64) int64 pid;
+
+		tag(65) uint32 fionread_count;
+
+		tag(66) uint32 drm_height;
+		tag(67) uint32 drm_width;
+		tag(68) uint32 pixel_format;
+		tag(69) uint64 modifier;
+		tag(70) uint32[] drm_pitches;
+		tag(71) uint32[] drm_offsets;
+		tag(72) uint32[] drm_handles;
+
+		tag(73) uint64 size;
+
+		tag(74) uint32 status;
+
+		tag(75) int32 snd_pversion;
+		tag(76) uint64 snd_frame_size;
+		tag(77) int64 snd_result;
+		tag(78) int32 snd_device;
+	}
+}
+
+message DrmIoctlGemCloseRequest 13 {
+head(128):
+	uint32 handle;
+}
+
+message DrmIoctlGemCloseReply 14 {
+head(128):
+	Errors error;
+}
+
+message InitializePosixLane 15 {
+head(128):
+}
+
+message ResolveCredentialsToPidReq 16 {
+head(128):
+	uint8[16] credentials;
+}
+
+message ResolveCredentialsToPidReply 17 {
+head(128):
+	Errors error;
+	int64 pid;
+}
+
+message SetSockOpt 18 {
+head(128):
+	int32 layer;
+	int32 number;
+	uint64 optlen;
+}
+
+message IfreqRequest 19 {
+head(128):
+	int32 command;
+	int32 index;
+tail:
+	string name;
+}
+
+struct Ifconf {
+	string name;
+	@format(ipv4) int32 ip4;
+}
+
+message IfreqReply 20 {
+head(128):
+	Errors error;
+	int32 mtu;
+	int32 ip4_addr;
+	int32 ip4_netmask;
+	int32 ip4_broadcast_addr;
+	int32 index;
+	int32 flags;
+	uint8[6] mac;
+tail:
+	string name;
+}
+
+message IfconfReply 21 {
+head(128):
+	Errors error;
+tail:
+	Ifconf[] ifconf;
+}
+
+message EvioGetNameRequest 22 {
+head(128):
+}
+
+message EvioGetNameReply 23 {
+head(128):
+	Errors error;
+tail:
+	string name;
+}
+
+message EvioGetIdRequest 24 {
+head(128):
+}
+
+message EvioGetIdReply 25 {
+head(128):
+	Errors error;
+	uint16 bustype;
+	uint16 vendor;
+	uint16 product;
+	uint16 version;
+}
+
+message EvioGetMultitouchSlotsRequest 26 {
+head(128):
+	uint32 code;
+}
+
+message EvioGetMultitouchSlotsReply 27 {
+head(128):
+	Errors error;
+tail:
+	uint32[] values;
+}
+
+message GetSockOpt 28 {
+head(128):
+	int32 layer;
+	int32 number;
+	uint64 optlen;
+}
+
+message UtimensatRequest 29 {
+head(128):
+	byte atime_update;
+	uint64 atime_sec;
+	uint64 atime_nsec;
+	byte mtime_update;
+	uint64 mtime_sec;
+	uint64 mtime_nsec;
+	uint64 ctime_sec;
+	uint64 ctime_nsec;
+}
+
+message ShutdownSocket 30 {
+head(128):
+	int32 how;
+}
+
+message GetLinkOrCreateRequest 31 {
+head(128):
+	int32 mode;
+	byte exclusive;
+	int64 uid;
+	int64 gid;
+tail:
+	string name;
+}
+
+message GetLinkOrCreateResponse 32 {
+head(128):
+	Errors error;
+	FileType file_type;
+	int64 id;
+	uint64 serial;
+}
+
+message MkdirRequest 33 {
+head(128):
+	int32 mode;
+	int32 uid;
+	int32 gid;
+tail:
+	string path;
+}
+
+message GetLinkRequest 34 {
+head(128):
+tail:
+	string path;
+}
+
+message LinkRequest 35 {
+head(128):
+	int32 fd;
+tail:
+	string path;
+}
+
+message UnlinkRequest 36 {
+head(128):
+tail:
+	string path;
+}
+
+message RmdirRequest 37 {
+head(128):
+tail:
+	string path;
+}
+
+message ReadEntriesRequest 38 {
+head(128):
+}
+
+message ReadEntriesResponse 39 {
+head(128):
+	Errors error;
+	FileType file_type;
+	uint64 ino;
+	int64 offset;
+tail:
+	string path;
+}
+
+message ObstructLinkRequest 40 {
+head(128):
+tail:
+	string link_name;
+}
+
+message CancelOperation 41 {
+head(128):
+	uint64 cancellation_id;
+}
+
+message FilePollRequest 42 {
+head(128):
+	uint64 cancellation_id;
+	uint64 sequence;
+	@format(hex) uint32 event_mask;
+}
+
+message FilePollResponse 43 {
+head(128):
+	Errors error;
+	@format(hex) int32 edges;
+	uint64 sequence;
+}
+
+message AcceptRequest 44 {
+head(128):
+}
+
+message GetFsStatsRequest 45 {
+head(128):
+}
+
+message GetFsStatsResponse 46 {
+head(128):
+	Errors error;
+	// Note: In struct statfs, bsize and namelen are 32 bits.
+	//       We make them 64 bits for consistency here.
+	uint32 fs_type;
+	uint64 block_size;
+	uint64 fragment_size;
+	uint64 num_blocks;
+	uint64 blocks_free;
+	uint64 blocks_free_user;
+	uint64 num_inodes;
+	uint64 inodes_free;
+	uint64 inodes_free_user;
+	uint64 max_name_length;
+	int32 fsid0;
+	int32 fsid1;
+	uint64 flags;
+}
+
+message NodeOpenRequest 47 {
+head(128):
+	byte append;
+	byte read;
+	byte write;
+}
+
+message NodeOpenResponse 48 {
+head(128):
+	Errors error;
+}
+
+message ChownRequest 49 {
+head(128):
+	uint32 uid;
+	uint32 gid;
+}
+
+message ChownResponse 50 {
+head(128):
+	Errors error;
+}
+
+message MountRequest 51 {
+head(128):
+tail:
+	string fs_type;
+}
+
+message MountResponse 52 {
+head(128):
+	Errors error;
+	uint64 caps;
+	uint64 root_inode;
+}
+
+message VtSetModeRequest 53 {
+head(128):
+	uint8 vt_mode;
+	uint8 vt_waitv;
+	uint16 vt_relsig;
+	uint16 vt_acqsig;
+	uint16 vt_frsig;
+}
+
+message VtActivateRequest 54 {
+head(128):
+	uint8 vt_mode;
+}
+
+message VtOpenqryResponse 55 {
+head(128):
+	Errors error;
+	uint16 vt_nr;
+}
+
+message VtGetModeResponse 56 {
+head(128):
+	Errors error;
+	uint8 vt_mode;
+	uint8 vt_waitv;
+	uint16 vt_relsig;
+	uint16 vt_acqsig;
+	uint16 vt_frsig;
+}
+
+message VtGetStateResponse 57 {
+head(128):
+	Errors error;
+	uint16 vt_nr;
+	uint16 vt_state;
+	uint16 vt_relsig;
+}
+
+message VtActivateResponse 58 {
+head(128):
+	Errors error;
+}
+
+message VtSetModeResponse 59 {
+head(128):
+	Errors error;
+}
+
+message ReadRequest 60 {
+head(128):
+	uint64 size;
+	uint64 cancellation_id;
+}
+
+message WriteRequest 61 {
+head(128):
+	uint64 size;
+}
+
+message PreadRequest 62 {
+head(128):
+	int64 offset;
+	uint64 size;
+}
+
+message PwriteRequest 63 {
+head(128):
+	int64 offset;
+	uint64 size;
+}
+
+message TruncateRequest 64 {
+head(128):
+	uint64 size;
+}
+
+message FallocateRequest 65 {
+head(128):
+	int64 rel_offset;
+	uint64 size;
+}
+
+@format(bitfield) consts SynchronizeFlags uint32 {
+	DATA_ONLY = 1
+}
+
+message SynchronizeRequest 66 {
+head(128):
+	SynchronizeFlags flags;
+}
+
+message SynchronizeResponse 67 {
+head(128):
+	Errors error;
+}

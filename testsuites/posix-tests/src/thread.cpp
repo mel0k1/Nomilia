@@ -1,0 +1,64 @@
+#include <assert.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <sys/eventfd.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include "testsuite.hpp"
+
+struct join_test_data {
+	pthread_t mainThread;
+	int efd;
+};
+
+static void *thread_A_func(void *arg) {
+	auto data = static_cast<join_test_data *>(arg);
+
+	// *data dies as soon as we release the main thread: pthread_exit() unwinds the frame
+	// that holds it and the libc exit path then reuses that stack.
+	auto mainThread = data->mainThread;
+	int efd = data->efd;
+
+	uint64_t val = 1;
+	ssize_t bytes_written = write(efd, &val, sizeof(uint64_t));
+	assert(bytes_written == sizeof(uint64_t));
+
+	void *code;
+	int ret = pthread_join(mainThread, &code);
+	assert(ret == 0);
+	fprintf(stderr, "main thread exited with 0x%lx\n", (uintptr_t) code);
+	assert((uintptr_t) code == 0xDEAD);
+
+	exit(0);
+}
+
+DEFINE_TEST(pthread_join_on_exiting_thread, ([] {
+	int child = fork();
+
+	if (!child) {
+		int efd = eventfd(0, 0);
+		assert(efd >= 0);
+
+		join_test_data data;
+		data.efd = efd;
+		data.mainThread = pthread_self();
+
+		pthread_t thread_A;
+		int ret = pthread_create(&thread_A, nullptr, thread_A_func, &data);
+		assert(ret == 0);
+
+		uint64_t val;
+		ssize_t read_len = read(efd, &val, sizeof(val));
+		fprintf(stderr, "read returns %ld\n", read_len);
+		assert(read_len == 8);
+
+		pthread_exit((void *) 0xDEAD);
+	}
+
+	int status;
+	auto ret = waitpid(child, &status, 0);
+	assert(ret == child);
+	assert(WIFEXITED(status));
+	assert(WEXITSTATUS(status) == 0);
+}));

@@ -1,0 +1,104 @@
+#pragma once
+
+#include <thor-internal/arch-generic/paging.hpp>
+#include <thor-internal/error.hpp>
+#include <thor-internal/physical.hpp>
+#include <thor-internal/rcu.hpp>
+#include <thor-internal/virtualization.hpp>
+
+constexpr uint64_t EPT_READ = (0);
+constexpr uint64_t EPT_WRITE = (1);
+constexpr uint64_t EPT_EXEC = (2);
+constexpr uint64_t EPT_USEREXEC = (10);
+constexpr uint64_t EPT_PHYSADDR = (12);
+constexpr uint64_t EPT_IGNORE_PAT = (6);
+constexpr uint64_t EPT_MEMORY_TYPE = (3);
+
+namespace thor::vmx {
+
+struct EptPtr {
+	uint64_t eptp;
+	uint64_t gpa;
+};
+
+struct EptPageSpace : PageSpace {
+	EptPageSpace(PhysicalAddr root);
+
+	EptPageSpace(const EptPageSpace &) = delete;
+
+	~EptPageSpace();
+
+	EptPageSpace &operator= (const EptPageSpace &) = delete;
+};
+
+struct EptOperations final : VirtualOperations {
+	EptOperations(EptPageSpace *pageSpace);
+
+	void retire(RetireNode *node) override;
+
+	bool submitShootdown(ShootNode *node) override;
+
+	frg::expected<Error, PagesAffected> mapPresentPages(VirtualAddr va, MemoryView *view,
+			uintptr_t offset, size_t size, PageFlags flags, CachingMode mode,
+			RevokeBatch &batch) override;
+
+	frg::expected<Error, PagesAffected> restrictPages(VirtualAddr va,
+			size_t size, PageFlags flags, RevokeBatch &batch) override;
+
+	frg::expected<Error, PagesAffected> faultPage(VirtualAddr va, MemoryView *view,
+			uintptr_t offset, FetchFlags fetchFlags, PageFlags flags, CachingMode mode,
+			RevokeBatch &batch) override;
+
+	frg::expected<Error, PagesAffected> cleanPages(VirtualAddr va, size_t size,
+			RevokeBatch &batch) override;
+
+	frg::expected<Error, PagesAffected> unmapPages(VirtualAddr va, size_t size,
+			RevokeBatch &batch) override;
+
+	frg::expected<Error, PagesAffected> agePages(VirtualAddr va, size_t size, bool vacate,
+			RevokeBatch &batch) override;
+
+private:
+	EptPageSpace *pageSpace_;
+};
+
+struct EptSpace final : VirtualizedPageSpace {
+	friend struct Vmcs;
+	friend struct ShootNode;
+
+private:
+	struct CtorToken {};
+
+public:
+	EptSpace(CtorToken, PhysicalAddr root);
+
+	EptSpace(const EptSpace &) = delete;
+
+	~EptSpace();
+
+	EptSpace& operator=(const EptSpace &) = delete;
+
+	static std::expected<smarter::shared_ptr<EptSpace>, Error> create() {
+		PhysicalAddr root = physicalAllocator->allocate(kPageSize);
+		if(root == static_cast<PhysicalAddr>(-1))
+			return std::unexpected{Error::noMemory};
+		PageAccessor accessor{root};
+		memset(accessor.get(), 0, kPageSize);
+
+		auto ptr = allocate_rcu_shared<EptSpace>(Allocator{}, CtorToken{}, root);
+		ptr->selfPtr = ptr;
+		ptr->setupInitialHole(0, 0x7ffffff00000);
+		return ptr;
+	}
+
+	PhysicalAddr rootTable() {
+		return pageSpace_.rootTable();
+	}
+
+private:
+	EptOperations eptOps_;
+	EptPageSpace pageSpace_;
+	frg::ticket_spinlock _mutex;
+};
+
+} // namespace thor

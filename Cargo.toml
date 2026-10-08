@@ -1,0 +1,11 @@
+[workspace]
+resolver = "3"
+members = ["sif", "posix/devserver", "servers/kernletcc", "utils/hello-rs"]
+
+[workspace.dependencies]
+hel = { path = "rust/hel" }
+hel-sys = { path = "rust/hel-sys" }
+managarm = { path = "rust/managarm" }
+managarm-arch = { path = "rust/arch" }
+uacpi-sys = { path = "rust/uacpi-sys" }
+zerocopy = { version = "0.8", features = ["derive"] }

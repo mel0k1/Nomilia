@@ -1,0 +1,133 @@
+#include <riscv/sbi.hpp>
+#include <thor-internal/acpi/acpi.hpp>
+#include <thor-internal/arch-generic/cpu.hpp>
+#include <thor-internal/arch-generic/timer.hpp>
+#include <thor-internal/arch/system.hpp>
+#include <thor-internal/arch/timer.hpp>
+#include <thor-internal/cpu-data.hpp>
+#include <thor-internal/dtb/dtb.hpp>
+#include <thor-internal/main.hpp>
+#include <thor-internal/schedule.hpp>
+#include <thor-internal/timer.hpp>
+#include <thor-internal/util.hpp>
+#include <uacpi/acpi.h>
+#include <uacpi/tables.h>
+
+namespace thor {
+
+namespace {
+
+// Timer tick duration stored in ns, and its reciprocal (= its frequency).
+constinit Pow2Fraction<Rounding::down> tickDuration;
+// The frequency is used to program the timer based on a deadline in ns.
+// Round up such that the timer fires after the deadline, not before.
+constinit Pow2Fraction<Rounding::up> tickFreq;
+
+initgraph::Task initTimerAcpi{
+    &globalInitEngine,
+    "riscv.init-timer-acpi",
+    initgraph::Requires{acpi::getTablesDiscoveredStage()},
+    initgraph::Entails{getTaskingAvailableStage()},
+    [] {
+	    if (!acpiRsdpNote->rsdp)
+		    return;
+
+	    uint32_t freqSeconds;
+	    uacpi_table rhct;
+
+	    if (uacpi_table_find_by_signature("RHCT", &rhct) != UACPI_STATUS_OK)
+		    panicLogger() << "thor: Unable to get RHCT" << frg::endlog;
+
+	    auto ptr = reinterpret_cast<acpi_rhct *>(rhct.ptr);
+	    freqSeconds = ptr->timebase_frequency;
+
+	    const char *impl;
+	    if (riscvHartCapsNote->hasExtension(RiscvExtension::sstc)) {
+		    impl = "Sstc";
+	    } else {
+		    impl = "SBI";
+	    }
+	    infoLogger() << "thor: Using " << impl << " to update S-mode timer" << frg::endlog;
+	    infoLogger() << "thor: Timer frequency is " << freqSeconds << " Hz" << frg::endlog;
+
+	    // Frequency is given in Hz. Hence, we need to divide by 10^9 to convert to nHz.
+	    uint64_t divisor = 1'000'000'000;
+	    tickDuration = computePow2Fraction<Rounding::down>(divisor, freqSeconds);
+	    tickFreq = computeReciprocal(tickDuration);
+    }
+};
+
+initgraph::Task initTimer{
+    &globalInitEngine,
+    "riscv.init-timer",
+    initgraph::Requires{getDeviceTreeParsedStage()},
+    initgraph::Entails{getTaskingAvailableStage()},
+    [] {
+	    if (!getDeviceTreeRoot())
+		    return;
+
+	    // Get the timebase-frequency property in /cpus.
+	    auto *dtCpus = getDeviceTreeNodeByPath("/cpus");
+	    if (!dtCpus)
+		    panicLogger() << "Device tree node /cpus is not available" << frg::endlog;
+	    auto maybeFreqProp = dtCpus->dtNode().findProperty("timebase-frequency");
+	    if (!maybeFreqProp)
+		    panicLogger() << "Device tree property timebase-frequency is missing from /cpus"
+		                  << frg::endlog;
+	    if (maybeFreqProp->size() != 4)
+		    panicLogger() << "Expected exactly one u32 in timebase-frequency" << frg::endlog;
+	    auto freqSeconds = maybeFreqProp->asU32();
+
+	    const char *impl;
+	    if (riscvHartCapsNote->hasExtension(RiscvExtension::sstc)) {
+		    impl = "Sstc";
+	    } else {
+		    impl = "SBI";
+	    }
+	    infoLogger() << "thor: Using " << impl << " to update S-mode timer" << frg::endlog;
+	    infoLogger() << "thor: Timer frequency is " << freqSeconds << " Hz" << frg::endlog;
+
+	    // Frequency is given in Hz. Hence, we need to divide by 10^9 to convert to nHz.
+	    uint64_t divisor = 1'000'000'000;
+	    tickDuration = computePow2Fraction<Rounding::down>(divisor, freqSeconds);
+	    tickFreq = computeReciprocal(tickDuration);
+    }
+};
+
+} // namespace
+
+uint64_t getRawTimestampCounter() {
+	uint64_t v;
+	asm volatile("rdtime %0" : "=r"(v));
+	return v;
+}
+
+uint64_t getClockNanos() { return tickDuration * getRawTimestampCounter(); }
+
+UserspaceClock getUserspaceClock() {
+	assert(tickDuration);
+	return {.type = UserspaceClockType::riscvTime, .tickDuration = tickDuration};
+}
+
+void setTimerDeadline(frg::optional<uint64_t> deadline) {
+	assert(!intsAreEnabled());
+
+	uint64_t rawDeadline = ~UINT64_C(0);
+	if (deadline)
+		rawDeadline = tickFreq * *deadline;
+
+	if (riscvHartCapsNote->hasExtension(RiscvExtension::sstc)) {
+		riscv::writeCsr<riscv::Csr::stimecmp>(rawDeadline);
+	} else {
+		sbi::time::setTimer(rawDeadline);
+	}
+}
+
+bool timerDisarmsItself() {
+	// STIP stays pending while time is past stimecmp.
+	return false;
+}
+
+bool haveTimer() { return static_cast<bool>(tickDuration); }
+
+} // namespace thor

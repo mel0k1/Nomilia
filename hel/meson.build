@@ -1,0 +1,56 @@
+headers = [
+	'include/hel.h',
+	'include/hel-stubs.h',
+	'include/hel-syscalls.h',
+	'include/hel-types.h',
+]
+
+helix_headers = [
+	'include/helix/clock.hpp',
+	'include/helix/dispatcher-pool.hpp',
+	'include/helix/ipc-structs.hpp',
+	'include/helix/ipc.hpp',
+	'include/helix/memory.hpp',
+	'include/helix/passthrough-fd.hpp',
+	'include/helix/timer.hpp',
+]
+
+src = files(
+	'src/clock.cpp',
+	'src/dispatcher-pool.cpp',
+	'src/globals.cpp',
+	'src/passthrough-fd.cpp',
+)
+
+if arch == 'aarch64'
+	headers += 'include/hel-stubs-aarch64.h'
+elif arch == 'riscv64'
+	headers += 'include/hel-stubs-riscv64.h'
+elif arch == 'x86_64'
+	headers += 'include/hel-stubs-x86_64.h'
+endif
+
+inc = [ 'include' ]
+
+if not provide_deps and not build_kernel
+	deps = [ bragi_dep, frigg, posix_extra_dep, libasync_dep ]
+
+	helix = shared_library('helix', src,
+		dependencies : deps,
+		include_directories : inc,
+		install : true
+	)
+
+	helix_dep = declare_dependency(
+		link_with : helix,
+		dependencies : deps,
+		include_directories : inc
+	)
+
+	install_headers(headers)
+	install_headers(helix_headers, subdir : 'helix')
+endif
+
+hel_dep = declare_dependency(
+	include_directories : inc
+)

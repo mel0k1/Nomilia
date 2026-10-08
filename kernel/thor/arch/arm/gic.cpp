@@ -1,0 +1,256 @@
+#include <frg/optional.hpp>
+#include <frg/scope_exit.hpp>
+#include <frg/vector.hpp>
+#include <thor-internal/acpi/acpi.hpp>
+#include <thor-internal/arch/gic.hpp>
+#include <thor-internal/arch/gic_v2.hpp>
+#include <thor-internal/arch/gic_v3.hpp>
+#include <thor-internal/arch/trap.hpp>
+#include <thor-internal/dtb/dtb.hpp>
+#include <thor-internal/int-call.hpp>
+#include <thor-internal/main.hpp>
+#include <thor-internal/metrics.hpp>
+#include <thor-internal/schedule.hpp>
+#include <thor-internal/thread.hpp>
+#include <thor-internal/traps.hpp>
+#include <uacpi/acpi.h>
+#include <uacpi/tables.h>
+
+namespace thor {
+
+namespace {
+
+void installAcpiGsiPins() {
+	std::visit(
+	    frg::overloaded{
+	        [](Gic *gic) {
+		        for (uint32_t irq = 32; irq < gic->irqCount(); ++irq) {
+			        auto pin = gic->getPin(irq);
+			        if (pin)
+				        acpi::setGlobalSystemIrq(irq, std::move(pin));
+		        }
+	        },
+	        [](std::monostate) {}
+	    },
+	    externalIrq
+	);
+}
+
+struct AcpiGicInfo {
+	uint32_t bspAffinity;
+	frg::optional<acpi_madt_gicd> gicd;
+	uintptr_t cpuInterface{0};
+	frg::vector<GicRedistributorRange, KernelAlloc> gicrRanges{*kernelAlloc};
+	frg::vector<GicRedistributorRange, KernelAlloc> giccRedistRanges{*kernelAlloc};
+};
+
+uacpi_iteration_decision handleMadtGicEntry(uacpi_handle opaque, acpi_entry_hdr *genericPtr) {
+	auto *info = static_cast<AcpiGicInfo *>(opaque);
+
+	switch (genericPtr->type) {
+		case ACPI_MADT_ENTRY_TYPE_GICD: {
+			acpi_madt_gicd entry;
+			memcpy(&entry, genericPtr, sizeof(entry));
+			info->gicd = entry;
+		} break;
+		case ACPI_MADT_ENTRY_TYPE_GICC: {
+			acpi_madt_gicc entry;
+			memcpy(&entry, genericPtr, sizeof(entry));
+			if (!(entry.flags & ACPI_GICC_ENABLED))
+				break;
+
+			if (affinityFromMpidr(entry.mpidr) == info->bspAffinity)
+				info->cpuInterface = entry.address;
+			if (entry.gicr_base_address)
+				info->giccRedistRanges.push({entry.gicr_base_address, 0x20000});
+		} break;
+		case ACPI_MADT_ENTRY_TYPE_GICR: {
+			acpi_madt_gicr entry;
+			memcpy(&entry, genericPtr, sizeof(entry));
+			info->gicrRanges.push({entry.address, entry.length});
+		} break;
+		default:
+			break;
+	}
+
+	return UACPI_ITERATION_DECISION_CONTINUE;
+}
+
+bool initGicFromAcpi() {
+	uacpi_table madtTbl;
+	if (uacpi_table_find_by_signature("APIC", &madtTbl) != UACPI_STATUS_OK)
+		return false;
+	frg::scope_exit finish{[&] { uacpi_table_unref(&madtTbl); }};
+
+	AcpiGicInfo info{.bspAffinity = getCpuData()->affinity};
+	if (uacpi_for_each_subtable(madtTbl.hdr, sizeof(acpi_madt), handleMadtGicEntry, &info)
+	    != UACPI_STATUS_OK) {
+		warningLogger() << "thor: Failed to parse the ACPI MADT" << frg::endlog;
+		return false;
+	}
+
+	auto &gicd = info.gicd;
+	auto &gicrRanges = info.gicrRanges;
+	auto &giccRedistRanges = info.giccRedistRanges;
+
+	if (!gicd) {
+		warningLogger() << "thor: ACPI MADT has no GIC distributor" << frg::endlog;
+		return false;
+	}
+
+	auto version = gicd->gic_version;
+	if (!version)
+		version = (gicrRanges.size() || giccRedistRanges.size()) ? 3 : 2;
+
+	if (version >= 3) {
+		if (gicrRanges.size())
+			return initGicV3FromAcpi(
+			    gicd->address,
+			    0x10000,
+			    frg::span<const GicRedistributorRange>{gicrRanges.data(), gicrRanges.size()}
+			);
+		return initGicV3FromAcpi(
+		    gicd->address,
+		    0x10000,
+		    frg::span<const GicRedistributorRange>{giccRedistRanges.data(), giccRedistRanges.size()}
+		);
+	}
+
+	if (!info.cpuInterface) {
+		warningLogger() << "thor: ACPI MADT has no BSP GICC CPU interface" << frg::endlog;
+		return false;
+	}
+
+	return initGicV2FromAcpi(gicd->address, info.cpuInterface, 0x2000);
+}
+
+} // namespace
+
+static initgraph::Task initGic{
+    &globalInitEngine,
+    "arm.init-gic",
+    initgraph::Requires{
+        acpi::getTablesDiscoveredStage(), getDeviceTreeParsedStage(), getBootProcessorReadyStage()
+    },
+    initgraph::Entails{getIrqControllerReadyStage()},
+    // Initialize the GIC.
+    [] {
+	    // Take either the ACPI or the device tree code path, never both.
+	    if (acpiRsdpNote->rsdp) {
+		    if (!initGicFromAcpi())
+			    panicLogger() << "thor: Failed to initialize the GIC from ACPI" << frg::endlog;
+
+		    initGicOnThisCpu();
+		    installAcpiGsiPins();
+		    return;
+	    }
+
+	    if (initGicV2() || initGicV3())
+		    initGicOnThisCpu();
+    }
+};
+
+void initGicOnThisCpu() {
+	if (std::holds_alternative<GicV2 *>(externalIrq)) {
+		initGicOnThisCpuV2();
+	} else if (std::holds_alternative<GicV3 *>(externalIrq)) {
+		initGicOnThisCpuV3();
+	}
+}
+
+constexpr bool logSGIs = false;
+constexpr bool logSpurious = false;
+
+void handleIrq(IrqImageAccessor image, IrqPin *irq);
+
+void handleGicIrq(IrqImageAccessor image, ClaimedExternalIrq irq) {
+	auto *cpuData = getCpuData();
+
+	if (irq.irq < 16) {
+		if constexpr (logSGIs) {
+			infoLogger() << "thor: handleGicIrq: on CPU " << cpuData->cpuIndex << ", got an SGI "
+			             << irq.irq << frg::endlog;
+		}
+
+		std::visit(
+		    frg::overloaded{
+		        [&](GicV2 *gic) { gic->eoi(irq.cpu, irq.irq); },
+		        [&](GicV3 *gic) { gic->eoi(irq.cpu, irq.irq); },
+		        [](auto &&) {
+			        // How did we even get here..?
+			        __builtin_trap();
+		        }
+		    },
+		    externalIrq
+		);
+
+		if (irq.irq == 0) {
+			pingIpisReceivedCounter.add();
+			localScheduler.get(cpuData).forcePreemptionCall();
+		} else if (irq.irq == 1) {
+			assert(!irqMutex().nesting());
+			disableUserAccess();
+
+			shootdownIpisReceivedCounter.add();
+			for (auto &binding : asidData.get()->bindings) {
+				binding.shootdown();
+			}
+
+			asidData.get()->globalBinding.shootdown();
+		} else if (irq.irq == 2) {
+			assert(!irqMutex().nesting());
+			disableUserAccess();
+
+			selfCallIpisReceivedCounter.add();
+			SelfIntCallBase::runScheduledCalls();
+		} else {
+			panicLogger() << "thor: handleGicIrq: Received unexpected SGI " << irq.irq
+			              << frg::endlog;
+		}
+
+		if (image.inUserMode()) {
+			auto thisThread = getCurrentThread();
+			assert(thisThread);
+
+			localScheduler.get(cpuData).checkPreemption();
+
+			if (thisThread->checkConditions()) {
+				iplDemoteContext(ipl::passive);
+				enableInts();
+
+				StatelessIrqLock irqLock(frg::dont_lock);
+				handleThreadReturnToUserMode(image, irqLock);
+				irqLock.release();
+			}
+		} else {
+			localScheduler.get(cpuData).checkPreemption(image);
+		}
+	} else if (irq.irq >= 1020) {
+		if constexpr (logSpurious) {
+			infoLogger() << "thor: handleGicIrq: on CPU " << cpuData->cpuIndex
+			             << ", got a spurious IRQ " << irq.irq << frg::endlog;
+		}
+	} else {
+		handleIrq(image, irq.pin);
+
+		if (image.inUserMode()) {
+			auto thisThread = getCurrentThread();
+			assert(thisThread);
+
+			localScheduler.get(cpuData).checkPreemption();
+
+			if (thisThread->checkConditions()) {
+				iplDemoteContext(ipl::passive);
+				enableInts();
+
+				StatelessIrqLock irqLock(frg::dont_lock);
+				handleThreadReturnToUserMode(image, irqLock);
+				irqLock.release();
+			}
+		} else {
+			localScheduler.get(cpuData).checkPreemption(image);
+		}
+	}
+}
+
+} // namespace thor

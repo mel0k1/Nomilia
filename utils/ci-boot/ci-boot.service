@@ -1,0 +1,12 @@
+[Unit]
+Description=CI Boot
+Documentation=https://docs.managarm.org/
+Wants=dhcpcd.service
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ci-boot.py
+
+[Install]
+WantedBy=ci-boot.target
