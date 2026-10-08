@@ -847,6 +847,11 @@ void handleSyscall(SyscallImageAccessor image) {
 		*image.error() = helFutexWake((int *)arg0, (unsigned int)arg1);
 	} break;
 
+	case kHelCallFutexRequeue: {
+		*image.error() = helFutexRequeue((int *)arg0, (int)arg1,
+				(unsigned int)arg2, (int *)arg3, (unsigned int)arg4);
+	} break;
+
 	case kHelCallCreateOneshotEvent: {
 		HelHandle handle;
 		*image.error() = helCreateOneshotEvent(&handle);

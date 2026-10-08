@@ -393,6 +393,12 @@ extern inline __attribute__ (( always_inline )) HelError helFutexWake(int *point
 	return helSyscall2(kHelCallFutexWake, (HelWord)pointer, count);
 };
 
+extern inline __attribute__ (( always_inline )) HelError helFutexRequeue(int *pointer,
+		int expected, unsigned int wakeCount, int *pointer2, unsigned int requeueCount) {
+	return helSyscall5(kHelCallFutexRequeue, (HelWord)pointer, (HelWord)expected,
+			(HelWord)wakeCount, (HelWord)pointer2, (HelWord)requeueCount);
+};
+
 extern inline __attribute__ (( always_inline )) HelError helCreateOneshotEvent(HelHandle *handle) {
 	HelWord handle_word;
 	HelError error = helSyscall0_1(kHelCallCreateOneshotEvent, &handle_word);

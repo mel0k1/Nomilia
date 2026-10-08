@@ -97,6 +97,7 @@ enum {
 
 	kHelCallFutexWait = 73,
 	kHelCallFutexWake = 71,
+	kHelCallFutexRequeue = 72,
 
 	kHelCallCreateOneshotEvent = 96,
 	kHelCallCreateBitsetEvent = 97,
@@ -1806,6 +1807,20 @@ HEL_C_LINKAGE HelError helFutexWait(int *pointer, int expected, int64_t deadline
 //! @param[in] count
 //!     Maximum number of waiters to wake.
 HEL_C_LINKAGE HelError helFutexWake(int *pointer, unsigned int count);
+
+//! Wakes waiters of a futex and requeues the remaining waiters onto a second futex.
+//! @param[in] pointer
+//!     Pointer that identifies the futex.
+//! @param[in] expected
+//!     Value expected in the futex word.
+//! @param[in] wakeCount
+//!     Maximum number of waiters to wake.
+//! @param[in] pointer2
+//!     Pointer that identifies the futex to requeue waiters onto.
+//! @param[in] requeueCount
+//!     Maximum number of waiters to requeue.
+HEL_C_LINKAGE HelError helFutexRequeue(int *pointer, int expected, unsigned int wakeCount,
+		int *pointer2, unsigned int requeueCount);
 
 //! @}
 //! @name Event Handling

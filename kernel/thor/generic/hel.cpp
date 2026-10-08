@@ -3904,6 +3904,26 @@ HelError helFutexWake(int *pointer, unsigned int count) {
 	return kHelErrNone;
 }
 
+HelError helFutexRequeue(int *pointer, int expected, unsigned int wakeCount,
+		int *pointer2, unsigned int requeueCount) {
+	auto thisThread = getCurrentThread();
+	auto space = thisThread->getAddressSpace();
+	auto address = reinterpret_cast<uintptr_t>(pointer);
+	auto address2 = reinterpret_cast<uintptr_t>(pointer2);
+
+	auto result = Thread::asyncBlockCurrent(
+		getGlobalFutexRealm()->requeue(
+			space->globalFutexSpace(), address, expected,
+			space->globalFutexSpace(), address2, wakeCount, requeueCount
+		),
+		thisThread->pagingWorkQueue().get()
+	);
+	if(!result)
+		return translateError(result.error());
+
+	return kHelErrNone;
+}
+
 HelError helCreateOneshotEvent(HelHandle *handle) {
 	auto this_thread = getCurrentThread();
 	auto this_universe = this_thread->getUniverse();

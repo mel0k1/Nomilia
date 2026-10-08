@@ -66,6 +66,7 @@ private:
 	// Represents a single waiter.
 	struct Node {
 		State st{State::none};
+		FutexIdentity id; // Slot this waiter is currently queued under.
 		frg::default_list_hook<Node> queueHook;
 		async::oneshot_primitive completionEvent;
 	};
@@ -111,6 +112,8 @@ public:
 				return;
 			}
 
+			node.id = id;
+
 			auto sit = _slots.get(id);
 			if(!sit) {
 				_slots.insert(id, Slot());
@@ -136,7 +139,7 @@ public:
 						return;
 					assert(node.st == State::none);
 
-					auto sit = _slots.get(id);
+					auto sit = _slots.get(node.id);
 					assert(sit);
 
 					// Invariant: If the slot exists then its queue is not empty.
@@ -147,7 +150,7 @@ public:
 					node.st = State::cancelled;
 
 					if(sit->queue.empty())
-						_slots.remove(id);
+						_slots.remove(node.id);
 				}
 
 				node.completionEvent.raise();
@@ -208,6 +211,102 @@ public:
 
 			if(sit->queue.empty())
 				_slots.remove(id);
+		}
+
+		while(!pending.empty()) {
+			auto node = pending.pop_front();
+			node->completionEvent.raise();
+		}
+
+		co_return {};
+	}
+
+	// ----------------------------------------------------------------------------------
+	// requeue().
+	// ----------------------------------------------------------------------------------
+
+	template<FutexSpace S>
+	coroutine<frg::expected<Error>> requeue(S space, uintptr_t address, unsigned int expected,
+				S space2, uintptr_t address2, uint32_t wakeCount, uint32_t requeueCount) {
+		FutexIdentity id;
+		bool futexRace = false;
+
+		auto result = co_await space.withFutex(address, [&](auto futex) {
+			id = futex.getIdentity();
+
+			auto irqLock = frg::guard(&irqMutex());
+			auto lock = frg::guard(&_mutex);
+
+			if(futex.read() != expected)
+				futexRace = true;
+		});
+		if(!result)
+			co_return result.error();
+		if(futexRace)
+			co_return Error::futexRace;
+
+		FutexIdentity id2;
+		auto result2 = co_await space2.withFutex(address2, [&](auto futex) {
+			id2 = futex.getIdentity();
+		});
+		if(!result2)
+			co_return result2.error();
+
+		frg::intrusive_list<
+				Node,
+				frg::locate_member<
+						Node,
+						frg::default_list_hook<Node>,
+						&Node::queueHook
+				>
+		> pending;
+		{
+			auto irqLock = frg::guard(&irqMutex());
+			auto lock = frg::guard(&_mutex);
+
+			auto sit = _slots.get(id);
+			if(sit) {
+				// Invariant: If the slot exists then its queue is not empty.
+				assert(!sit->queue.empty());
+
+				while(!sit->queue.empty() && wakeCount) {
+					auto node = sit->queue.front();
+					assert(node->st == State::none);
+					sit->queue.pop_front();
+
+					node->st = State::done;
+					pending.push_back(node);
+
+					wakeCount--;
+				}
+
+				// Waiters are only moved between distinct slots.
+				if(id != id2) {
+					Slot *dit = nullptr;
+					while(!sit->queue.empty() && requeueCount) {
+						auto node = sit->queue.front();
+						assert(node->st == State::none);
+						sit->queue.pop_front();
+
+						if(!dit) {
+							auto it2 = _slots.get(id2);
+							if(!it2) {
+								_slots.insert(id2, Slot());
+								it2 = _slots.get(id2);
+							}
+							dit = it2;
+						}
+
+						node->id = id2;
+						dit->queue.push_back(node);
+
+						requeueCount--;
+					}
+				}
+
+				if(sit->queue.empty())
+					_slots.remove(id);
+			}
 		}
 
 		while(!pending.empty()) {
