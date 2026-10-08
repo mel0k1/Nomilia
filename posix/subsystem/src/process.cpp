@@ -1145,6 +1145,20 @@ Generation::~Generation() {
 ProcessId nextPid = 2;
 std::map<ProcessId, PidHull *> globalPidMap;
 
+size_t liveThreadGroupCount() {
+	size_t count = 0;
+	for(auto [pid, hull] : globalPidMap) {
+		(void)pid;
+		if(hull->getThreadGroup())
+			count++;
+	}
+	return count;
+}
+
+ProcessId lastProcessId() {
+	return nextPid - 1;
+}
+
 PidHull::PidHull(pid_t pid)
 : pid_{pid} {
 	auto [it, success] = globalPidMap.insert({pid_, this});
@@ -1472,6 +1486,8 @@ async::result<std::shared_ptr<Process>> Process::fork(std::shared_ptr<Process> o
 	auto process = std::make_shared<Process>(threadGroup, std::move(hull));
 	process->threadGroup()->associateProcess(process);
 	process->_path = original->path();
+	process->threadGroup()->cmdline() = original->threadGroup()->cmdline();
+	process->threadGroup()->environment() = original->threadGroup()->environment();
 	process->_name = original->name();
 	process->_vmContext = co_await VmContext::clone(std::move(hierarchy), original->_vmContext);
 	process->_fsContext = FsContext::clone(original->_fsContext);
@@ -1584,6 +1600,8 @@ Process::clone(std::shared_ptr<Process> original, void *ip, void *sp, posix::sup
 		threadGroup = ThreadGroup::create(std::move(pidHull), parentPtr);
 		original->pgPointer()->reassociateProcess(threadGroup);
 		threadGroup->getHull()->initializeThreadGroup(threadGroup);
+		threadGroup->cmdline() = original->threadGroup()->cmdline();
+		threadGroup->environment() = original->threadGroup()->environment();
 	}
 
 	auto tidHull = std::make_shared<PidHull>(nextPid++);
@@ -1805,6 +1823,8 @@ async::result<Error> Process::exec(std::shared_ptr<Process> process,
 	process->_clientClkTrackerPage = exec_clk_tracker_page;
 	process->_clientAuxBegin = execResult.auxBegin;
 	process->_clientAuxEnd = execResult.auxEnd;
+	process->threadGroup()->cmdline() = std::move(execResult.args);
+	process->threadGroup()->environment() = std::move(execResult.env);
 	process->threadGroup()->didExecute_ = true;
 	HEL_CHECK(helGetCredentials(process->_threadDescriptor.getHandle(), 0, process->credentials_.data()));
 

@@ -36,6 +36,10 @@ helix::BorrowedDescriptor getZeroMemory();
 HelHandle rootHierarchy();
 HelHandle sharedHierarchy();
 
+// Live thread groups and highest allocated PID; exposed via /proc/loadavg.
+size_t liveThreadGroupCount();
+ProcessId lastProcessId();
+
 // This struct holds the process' VMAs.
 // TODO: We need a clarification here: Does mmap() keep file descriptions open (e.g. for flock())?
 struct VmContext {
@@ -919,6 +923,14 @@ struct ThreadGroup : std::enable_shared_from_this<ThreadGroup> {
 		return procfsLink_;
 	}
 
+	std::vector<std::string> &cmdline() {
+		return cmdline_;
+	}
+
+	std::vector<std::string> &environment() {
+		return environment_;
+	}
+
 	void setDumpable(bool dumpable) {
 		dumpable_ = dumpable;
 	}
@@ -1036,6 +1048,10 @@ private:
 	gid_t _sgid;
 
 	std::vector<gid_t> supplementaryGids_;
+
+	// argv/environ of the most recent exec(); served via /proc/[pid]/{cmdline,environ}.
+	std::vector<std::string> cmdline_;
+	std::vector<std::string> environment_;
 
 	// Raised by Process::terminate().
 	async::recurring_event processTerminationEvent_;

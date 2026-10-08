@@ -305,6 +305,8 @@ smarter::shared_ptr<Link, LinkRc> DirectoryNode::createRootDirectory() {
 	the_node->_entries.insert(std::move(self_thread_link));
 
 	the_node->directMkregular(link.get(), "uptime", makeFsShared<UptimeNode>());
+	the_node->directMkregular(link.get(), "loadavg", makeFsShared<LoadavgNode>());
+	the_node->directMkregular(link.get(), "version", makeFsShared<VersionNode>());
 	the_node->directMknode(link.get(), "mounts", makeFsShared<MountsLink>());
 
 	auto sysLink = the_node->directMkdir(link.get(), "sys");
@@ -363,6 +365,8 @@ smarter::shared_ptr<Link, LinkRc> DirectoryNode::createProcDirectory(FsLink *par
 	proc_dir->directMkregular(link.get(), "comm", makeFsShared<CommNode>(process));
 	proc_dir->directMkregular(link.get(), "stat", makeFsShared<StatNode>(process));
 	proc_dir->directMkregular(link.get(), "statm", makeFsShared<StatmNode>(process));
+	proc_dir->directMkregular(link.get(), "environ", makeFsShared<EnvironNode>(process));
+	proc_dir->directMkregular(link.get(), "cmdline", makeFsShared<CommandlineNode>(process));
 	proc_dir->directMkregular(link.get(), "status", makeFsShared<ProcessStatusNode>(process->threadGroup()->weak_from_this()));
 	proc_dir->directMkregular(link.get(), "cgroup", makeFsShared<CgroupNode>(process));
 	proc_dir->directMkregular(link.get(), "mounts", makeFsShared<MountsNode>(process));
@@ -590,6 +594,97 @@ async::result<void> HostnameNode::store(std::string) {
 	// TODO: proper error reporting.
 	std::cout << "posix: Can't store to a /proc/sys/kernel/hostname file" << std::endl;
 	co_return;
+}
+
+async::result<std::expected<std::string, Error>> LoadavgNode::show(Process *) {
+	// See man 5 proc for more details.
+	// TODO: Report real load once scheduler load tracking is exposed to posix.
+	std::stringstream stream;
+	size_t processCount = liveThreadGroupCount();
+	stream << "0.00 0.00 0.00 " << processCount << "/" << processCount
+			<< " " << lastProcessId() << "\n";
+	co_return stream.str();
+}
+
+async::result<void> LoadavgNode::store(std::string) {
+	// TODO: proper error reporting.
+	std::cout << "posix: Can't store to a /proc/loadavg file" << std::endl;
+	co_return;
+}
+
+async::result<std::expected<std::string, Error>> VersionNode::show(Process *) {
+	// Linux software keys off /proc/version to detect the emulated ABI level.
+	std::stringstream stream;
+	stream << "Linux version 6.1.0 (Nomilia 0.0.1) (gcc version " << __VERSION__ << ") #1 SMP\n";
+	co_return stream.str();
+}
+
+async::result<void> VersionNode::store(std::string) {
+	// TODO: proper error reporting.
+	std::cout << "posix: Can't store to a /proc/version file" << std::endl;
+	co_return;
+}
+
+EnvironNode::EnvironNode(Process* process)
+	: _process(process->weak_from_this())
+	{ }
+
+async::result<std::expected<std::string, Error>> EnvironNode::show(Process *) {
+	auto p = _process.lock();
+	if (!p)
+		co_return std::unexpected(Error::noSuchProcess);
+
+	// See man 5 proc for more details.
+	// Entries are NUL-terminated, as on Linux.
+	std::string data;
+	for(const auto &entry : p->threadGroup()->environment())
+		data += entry + '\0';
+	co_return data;
+}
+
+async::result<void> EnvironNode::store(std::string) {
+	// TODO: proper error reporting.
+	std::cout << "posix: Can't store to a /proc/[pid]/environ file" << std::endl;
+	co_return;
+}
+
+async::result<frg::expected<Error, FileStats>> EnvironNode::getStats() {
+	auto p = _process.lock();
+	if (!p)
+		co_return Error::noSuchProcess;
+
+	co_return co_await getStatsInternal(p->threadGroup());
+}
+
+CommandlineNode::CommandlineNode(Process* process)
+	: _process(process->weak_from_this())
+	{ }
+
+async::result<std::expected<std::string, Error>> CommandlineNode::show(Process *) {
+	auto p = _process.lock();
+	if (!p)
+		co_return std::unexpected(Error::noSuchProcess);
+
+	// See man 5 proc for more details.
+	// Arguments are NUL-terminated, as on Linux.
+	std::string data;
+	for(const auto &entry : p->threadGroup()->cmdline())
+		data += entry + '\0';
+	co_return data;
+}
+
+async::result<void> CommandlineNode::store(std::string) {
+	// TODO: proper error reporting.
+	std::cout << "posix: Can't store to a /proc/[pid]/cmdline file" << std::endl;
+	co_return;
+}
+
+async::result<frg::expected<Error, FileStats>> CommandlineNode::getStats() {
+	auto p = _process.lock();
+	if (!p)
+		co_return Error::noSuchProcess;
+
+	co_return co_await getStatsInternal(p->threadGroup());
 }
 
 expected<std::string> SelfLink::readSymlink(FsLink *, Process *process) {

@@ -12,6 +12,11 @@
 constexpr size_t kPageSize = 0x1000;
 constexpr uintptr_t ldsoBaseAddress = 0x40000000;
 
+// mlibc's managarm auxv has no AT_CLKTCK yet; the Linux value is a stable ABI number.
+#ifndef AT_CLKTCK
+#define AT_CLKTCK 17
+#endif
+
 // This struct is parsed before knowing the type of executable (PIE vs. non-PIE)
 // and also before knowing the ELF's base address.
 struct ImagePreamble {
@@ -414,6 +419,8 @@ execute(ViewPath root, ViewPath workdir,
 		.effectiveUid = newUid,
 		.effectiveGid = newGid,
 		.savedUid = self->threadGroup()->uid(),
-		.savedGid = self->threadGroup()->gid()
+		.savedGid = self->threadGroup()->gid(),
+		.args = std::move(args),
+		.env = std::move(env)
 	};
 }

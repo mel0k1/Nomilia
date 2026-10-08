@@ -299,6 +299,42 @@ struct HostnameNode final : RegularNode {
 	async::result<void> store(std::string) override;
 };
 
+struct LoadavgNode final : RegularNode {
+	LoadavgNode() {}
+
+	async::result<std::expected<std::string, Error>> show(Process *) override;
+	async::result<void> store(std::string) override;
+};
+
+struct VersionNode final : RegularNode {
+	VersionNode() {}
+
+	async::result<std::expected<std::string, Error>> show(Process *) override;
+	async::result<void> store(std::string) override;
+};
+
+struct EnvironNode final : RegularNode {
+	EnvironNode(Process *process);
+
+	async::result<std::expected<std::string, Error>> show(Process *) override;
+	async::result<void> store(std::string) override;
+
+	async::result<frg::expected<Error, FileStats>> getStats() override;
+private:
+	std::weak_ptr<Process> _process;
+};
+
+struct CommandlineNode final : RegularNode {
+	CommandlineNode(Process *process);
+
+	async::result<std::expected<std::string, Error>> show(Process *) override;
+	async::result<void> store(std::string) override;
+
+	async::result<frg::expected<Error, FileStats>> getStats() override;
+private:
+	std::weak_ptr<Process> _process;
+};
+
 struct CommNode final : RegularNode {
 	CommNode(Process *process);
 
