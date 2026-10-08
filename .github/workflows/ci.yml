@@ -38,8 +38,8 @@ jobs:
                 fork_head="$(awk '{print $1}' <<< $fork_remote)"
                 echo "caching-key=${{ env.BOOTSTRAP_COMMIT }}-$mlibc_head-$fork_head" >> "$GITHUB_OUTPUT"
           - id: cache-rootfs
-            name: Cache buildenv rootfs
-            uses: actions/cache@v5
+            name: Restore buildenv rootfs
+            uses: actions/cache/restore@v5
             with:
                 key: "rootfs-${{ steps.keys.outputs.caching-key }}"
                 path: rootfs/
@@ -49,9 +49,15 @@ jobs:
                 set -x
                 curl -o rootfs.tar.gz https://repos.managarm.org/buildenv/managarm-buildenv.tar.gz
                 tar -xzf rootfs.tar.gz
+          - name: Save buildenv rootfs cache
+            if: steps.cache-rootfs.outputs.cache-hit != 'true'
+            uses: actions/cache/save@v5
+            with:
+                key: "rootfs-${{ steps.keys.outputs.caching-key }}"
+                path: rootfs/
           - id: cache-xbps
-            name: Cache prebuilt xbps dependencies
-            uses: actions/cache@v5
+            name: Restore prebuilt xbps dependencies
+            uses: actions/cache/restore@v5
             with:
                 key: "xbps-x86_64-${{ steps.keys.outputs.caching-key }}"
                 path: build/xbps-repo/*.xbps
@@ -108,6 +114,12 @@ jobs:
                 rm -f xbps-repo/mlibc*.xbps
                 ~/.xbstrap/bin/xbps-rindex -fa xbps-repo/*.xbps
                 xbstrap install mlibc
+          - name: Save prebuilt xbps dependencies cache
+            if: steps.cache-xbps.outputs.cache-hit != 'true'
+            uses: actions/cache/save@v5
+            with:
+                key: "xbps-x86_64-${{ steps.keys.outputs.caching-key }}"
+                path: build/xbps-repo/*.xbps
 
     build-package:
         strategy:
