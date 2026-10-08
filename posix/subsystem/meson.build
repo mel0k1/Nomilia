@@ -62,6 +62,39 @@ src = [
 	devserver_bragi
 ]
 
+# vDSO: freestanding DSO, встраивается в posix-subsystem блобом.
+if arch == 'x86_64'
+	py = import('python').find_installation('python3')
+
+	vdso_so = custom_target('nomilia-vdso.so',
+		input : 'vdso/vdso.c',
+		output : 'nomilia-vdso.so',
+		command : [
+			meson.get_compiler('c').cmd_array(),
+			'-ffreestanding', '-fPIC', '-O2',
+			'-fno-stack-protector', '-fno-asynchronous-unwind-tables',
+			'-fno-plt', '-std=gnu11',
+			'@INPUT@',
+			'-shared', '-nostdlib',
+			'-Wl,-z,max-page-size=0x1000',
+			'-Wl,--hash-style=both',
+			'-Wl,--version-script=' + meson.current_source_dir() / 'vdso/vdso.version',
+			'-Wl,-soname,linux-vdso.so.1',
+			'-Wl,--no-undefined', '-Wl,--build-id=none',
+			'-Wl,-e,__vdso_clock_gettime',
+			'-o', '@OUTPUT@'
+		]
+	)
+
+	vdso_blob = custom_target('vdso-blob.c',
+		input : vdso_so,
+		output : 'vdso-blob.c',
+		command : [py, files('vdso/gen-blob.py'), '@INPUT@', '@OUTPUT@']
+	)
+
+	src += [vdso_blob]
+endif
+
 executable('posix-subsystem', src,
 	dependencies : [ mbus_proto_dep, fs_proto_dep, posix_extra_dep, clock_proto_dep, kerncfg_proto_dep, hw_proto_dep, ostrace_proto_dep, frigg, core_dep ],
 	install : true

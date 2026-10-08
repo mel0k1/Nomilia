@@ -40,7 +40,8 @@
 
 ## Этап 3 — Linux ABI v2: динамические программы
 
-- [ ] vDSO: каркас на базе `user-clock.cpp` — vvar-страница, DSO с `clock_gettime`/`gettimeofday`/`time`, встраивание в initrd, `AT_SYSINFO_EHDR` в `exec.cpp`, вызов из mlibc
+- [x] vDSO: freestanding DSO (`posix/subsystem/vdso/`) с `__vdso_clock_gettime`/`clock_getres`/`gettimeofday`/`time`/`getcpu` (версионируемые символы `LINUX_2.6`, оба hash-стиля); блоб встраивается в posix-subsystem; `execute()` маппит фиксированный регион `[clock-страница ядра][страница clocktracker][vdso.so]` и публикует `AT_SYSINFO_EHDR`; данные — уже существующие `HelClockPage` (TSC+seqlock) и tracker-страница; приёмочный тест `vdso_*` в posix-tests (QEMU)
+- [ ] mlibc: vDSO wiring — `sys_clock_get`/`gettimeofday` через `AT_SYSINFO_EHDR` (сейчас vDSO потребляют Linux-бинарники; mlibc ходит syscall'ом)
 - [ ] Обработка `PT_TLS` и arch_prctl-эквиваленты → динамический `ld-linux`/glibc
 - [ ] Linux socket ABI: трансляция sockopt/sockaddr в `requests/socket.cpp` и netserver; протокол IPv6
 - [ ] inotify: свести поведение с Linux-семантикой (masked-события, IN_EXCL_UNLINK и пр.)

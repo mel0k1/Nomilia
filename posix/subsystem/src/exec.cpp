@@ -8,13 +8,23 @@
 #include "vfs.hpp"
 #include "exec.hpp"
 #include <fs.bragi.hpp>
+#include <core/clock.hpp>
+#include "../vdso/vdso-layout.h"
 
 constexpr size_t kPageSize = 0x1000;
 constexpr uintptr_t ldsoBaseAddress = 0x40000000;
 
+#ifdef __x86_64__
+extern "C" const unsigned char nomilia_vdso_blob[];
+extern "C" const unsigned long nomilia_vdso_size;
+#endif
+
 // mlibc's managarm auxv has no AT_CLKTCK yet; the Linux value is a stable ABI number.
 #ifndef AT_CLKTCK
 #define AT_CLKTCK 17
+#endif
+#ifndef AT_SYSINFO_EHDR
+#define AT_SYSINFO_EHDR 33
 #endif
 
 // This struct is parsed before knowing the type of executable (PIE vs. non-PIE)
@@ -283,6 +293,37 @@ execute(ViewPath root, ViewPath workdir,
 	assert(ldsoFile); // If open() succeeds, it must return a non-null file.
 	auto ldsoInfo = FRG_CO_TRY(co_await loadElfImage(ldsoFile, vmContext.get(), ldsoBaseAddress));
 
+#ifdef __x86_64__
+	// Маппим vDSO: clock-страница ядра, страница clocktracker и сам vdso.so.
+	HelHandle clockHandle;
+	HEL_CHECK(helObtainHandle(kHelObtainClockPage, &clockHandle));
+	FRG_CO_TRY(co_await vmContext->mapFile(vdsoClockPageAddress,
+			helix::UniqueDescriptor{clockHandle}, nullptr,
+			0, kPageSize, false,
+			kHelMapProtRead | kHelMapFixedNoReplace));
+
+	FRG_CO_TRY(co_await vmContext->mapFile(vdsoTrackPageAddress,
+			clk::trackerPageMemory().dup(), nullptr,
+			0, kPageSize, false,
+			kHelMapProtRead | kHelMapFixedNoReplace));
+
+	size_t vdsoSize = (nomilia_vdso_size + kPageSize - 1) & ~size_t(kPageSize - 1);
+	HelHandle vdsoHandle;
+	HEL_CHECK(helAllocateMemory(vmContext->getHierarchy().getHandle(),
+			vdsoSize, 0, nullptr, &vdsoHandle));
+
+	void *vdsoWindow;
+	HEL_CHECK(helMapMemory(vdsoHandle, kHelNullHandle, nullptr,
+			0, vdsoSize, kHelMapProtRead | kHelMapProtWrite, &vdsoWindow));
+	memcpy(vdsoWindow, nomilia_vdso_blob, nomilia_vdso_size);
+	HEL_CHECK(helUnmapMemory(kHelNullHandle, vdsoWindow, vdsoSize));
+
+	FRG_CO_TRY(co_await vmContext->mapFile(vdsoTextAddress,
+			helix::UniqueDescriptor{vdsoHandle}, nullptr,
+			0, vdsoSize, false,
+			kHelMapProtRead | kHelMapProtExecute | kHelMapFixedNoReplace));
+#endif
+
 	auto link = execFile->associatedLink();
 	if(!link) {
 		co_return Error::badExecutable;
@@ -389,6 +430,10 @@ execute(ViewPath root, ViewPath workdir,
 		uintptr_t(newGid),
 		AT_RANDOM,
 		uintptr_t(randomPtr),
+#ifdef __x86_64__
+		AT_SYSINFO_EHDR,
+		vdsoTextAddress,
+#endif
 		AT_NULL,
 		0
 	});
