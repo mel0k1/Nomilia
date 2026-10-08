@@ -339,6 +339,16 @@ execute(ViewPath root, ViewPath workdir,
 	if(wordParity & 1)
 		pushWord(0);
 
+	// 16 bytes of entropy passed to the image through AT_RANDOM.
+	char random[16];
+	size_t n = 0;
+	while(n < sizeof(random)) {
+		size_t chunk;
+		HEL_CHECK(helGetRandomBytes(random + n, sizeof(random) - n, &chunk));
+		n += chunk;
+	}
+	auto randomPtr = copyArrayToStack(window, d, random);
+
 	void *auxEnd = reinterpret_cast<std::byte *>(stackBase) + d;
 	copyArrayToStack(window, d, (uintptr_t[]){
 		AT_ENTRY,
@@ -357,6 +367,8 @@ execute(ViewPath root, ViewPath workdir,
 		ldsoBaseAddress,
 		AT_PAGESZ,
 		0x1000,
+		AT_RANDOM,
+		uintptr_t(randomPtr),
 		AT_NULL,
 		0
 	});
