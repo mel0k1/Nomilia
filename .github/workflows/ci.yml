@@ -112,7 +112,7 @@ jobs:
                 rm -f xbps-repo/managarm-[0-9]*.xbps xbps-repo/managarm-kernel*.xbps xbps-repo/managarm-system*.xbps
                 # Build mlibc from the Nomilia fork instead of caching upstream prebuilts.
                 rm -f xbps-repo/mlibc*.xbps
-                ~/.xbstrap/bin/xbps-rindex -fa xbps-repo/*.xbps
+                ~/.xbstrap/bin/xbps-rindex -c xbps-repo
                 xbstrap install mlibc
           - name: Save prebuilt xbps dependencies cache
             if: steps.cache-xbps.outputs.cache-hit != 'true'
