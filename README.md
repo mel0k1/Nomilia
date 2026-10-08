@@ -74,7 +74,7 @@
 
 ## Статус
 
-Снапшот кодовой базы Managarm (`85fd43c8d`) импортирован как основа (см. [meta/UPSTREAM.md](meta/UPSTREAM.md)). Сборка и QEMU-тесты (boot-матрица + kernel/posix-тесты) работают в CI — этап 1 закрыт. Этап 2 в ходу: auxv дополнен `AT_RANDOM`, `AT_CLKTCK`, `AT_HWCAP`, `AT_UID/EUID/GID/EGID`; в ядре появилась переочередь фьютексов (`helFutexRequeue`, Hel ABI №72). procfs дополнен Linux-файлами (`cpuinfo`, `meminfo`, `loadavg`, `version`, `[pid]/environ`, `[pid]/cmdline`); форкнут mlibc (ветка `nomilia`): `AT_CLKTCK`, sysdep-хук `FutexRequeue`, Linux-совместимый `uname` — CI собирает mlibc из форка. Дальше по роадмапу: слой linux-sysdeps, vDSO.
+Снапшот кодовой базы Managarm (`85fd43c8d`) импортирован как основа (см. [meta/UPSTREAM.md](meta/UPSTREAM.md)). Сборка и QEMU-тесты (boot-матрица + kernel/posix-тесты) работают в CI — этап 1 закрыт. Этап 2 в ходу: auxv дополнен `AT_RANDOM`, `AT_CLKTCK`, `AT_HWCAP`, `AT_UID/EUID/GID/EGID`; в ядре появилась переочередь фьютексов (`helFutexRequeue`, Hel ABI №72). procfs дополнен Linux-файлами (`cpuinfo`, `meminfo`, `loadavg`, `version`, `[pid]/environ`, `[pid]/cmdline`); форкнут mlibc (ветка `nomilia`): `AT_CLKTCK`, sysdep-хук `FutexRequeue`, Linux-совместимый `uname` — CI собирает mlibc из форка. Весь пайплайн зелёный: 7 сценариев бута в QEMU (BIOS/UEFI × Limine/MB2/virtio) + kernel/posix/os-test/rust-тесты. Дальше по роадмапу: слой linux-sysdeps, vDSO.
 
 ## Благодарности
 

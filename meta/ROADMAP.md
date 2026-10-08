@@ -27,9 +27,9 @@
 
 Первая настоящая фича Nomilia. Цель — **немодифицированный статический musl-бинарник (busybox) запускается и работает**.
 
-- [x] `exec.cpp`: `AT_RANDOM` в auxv — 16 случайных байт через `helGetRandomBytes`
+- [x] `exec.cpp`: `AT_RANDOM` в auxv — 16 случайных байт через `helGetRandomBytes` (проверено QEMU-бутом; важно: `copyArrayToStack` возвращает адрес в window posix-подсистемы — для auxv нужен `stackBase + d`)
 - [x] `exec.cpp`: `AT_CLKTCK`, `AT_HWCAP`, `AT_UID/EUID/GID/EGID` (`AT_PLATFORM` — позже: нужен маппинг строки в образ процесса)
-- [x] Ядро: переочередь фьютексов `helFutexRequeue` (Hel ABI №72: wake N + перенос M в другой слот; cmp-проверка как в `FUTEX_CMP_REQUEUE`); PI-варианты пока не нужны
+- [x] Ядро: переочередь фьютексов `helFutexRequeue` (Hel ABI №72: wake N + перенос M в другой слот; cmp-проверка как в `FUTEX_CMP_REQUEUE`); PI-варианты пока не нужны (kernel-test `futexRequeueSanity` проходит в QEMU; sysdep-хук `FutexRequeue` заведён в mlibc-форке)
 - [x] procfs: `cpuinfo` (cpuid+kerncfg), `meminfo` (kerncfg), `loadavg`, `version`, `/proc/[pid]/environ`, `/proc/[pid]/cmdline`; `status`/`maps` уже есть upstream; глобальный `/proc/cmdline` тоже уже есть upstream
 - [~] mlibc: форк [mel0k1/mlibc](https://github.com/mel0k1/mlibc) (ветка `nomilia`, база — пиннутый `880b1ce7`); сделано: `AT_CLKTCK` в `abis/managarm/auxv.h`, sysdep-хук `FutexRequeue` (wiring на `helFutexRequeue`), Linux-совместимый `uname`; CI собирает mlibc из форка
 - [ ] mlibc: слой `linux-sysdeps` — таблица «Linux nr → bragi» для статической musl-персональности
