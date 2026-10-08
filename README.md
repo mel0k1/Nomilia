@@ -16,6 +16,7 @@
 ![Arch](https://img.shields.io/badge/arch-x86__64%20%7C%20aarch64%20%7C%20riscv64-informational)
 ![Base](https://img.shields.io/badge/based%20on-Managarm-8A2BE2)
 ![Status](https://img.shields.io/badge/status-early%20development-red)
+[![CI](https://github.com/mel0k1/Nomilia/actions/workflows/ci.yml/badge.svg)](https://github.com/mel0k1/Nomilia/actions/workflows/ci.yml)
 
 </div>
 
@@ -73,7 +74,7 @@
 
 ## Статус
 
-Снапшот кодовой базы Managarm (`85fd43c8d`) импортирован как основа (см. [meta/UPSTREAM.md](meta/UPSTREAM.md)). Начат этап 2: `AT_RANDOM` в auxv реализован (`posix/subsystem/src/exec.cpp`) — первый кирпич Linux-совместимости. Дальше по роадмапу: остальные записи auxv, `FUTEX_REQUEUE`, procfs в Linux-формате.
+Снапшот кодовой базы Managarm (`85fd43c8d`) импортирован как основа (см. [meta/UPSTREAM.md](meta/UPSTREAM.md)). Сборка и QEMU-тесты (boot-матрица + kernel/posix-тесты) работают в CI — этап 1 закрыт. Этап 2 в ходу: auxv дополнен `AT_RANDOM`, `AT_CLKTCK`, `AT_HWCAP`, `AT_UID/EUID/GID/EGID`; в ядре появилась переочередь фьютексов (`helFutexRequeue`, Hel ABI №72). Дальше по роадмапу: procfs в Linux-формате, слой linux-sysdeps в mlibc.
 
 ## Благодарности
 

@@ -1,0 +1,229 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+    # bootstrap-managarm revision matching our upstream snapshot (2026-10).
+    # Bump it when rebasing the Nomilia tree onto a newer managarm snapshot.
+    BOOTSTRAP_COMMIT: 1c1536cd908f319819317b80f0d37f6ba736b1ac
+
+jobs:
+    cache-prereqs:
+        name: Cache build prerequisites
+        runs-on: ubuntu-24.04
+        timeout-minutes: 60
+        outputs:
+            caching-key: ${{ steps.keys.outputs.caching-key }}
+        steps:
+          - id: keys
+            name: Compute caching keys
+            run: |
+                set -x
+                mlibc_remote="$(git ls-remote https://github.com/managarm/mlibc.git refs/heads/master)"
+                mlibc_head="$(grep -Po '[0-9a-z]+(?=\t+refs/heads/master$)' <<< $mlibc_remote)"
+                echo "caching-key=${{ env.BOOTSTRAP_COMMIT }}-$mlibc_head" >> "$GITHUB_OUTPUT"
+          - id: cache-rootfs
+            name: Cache buildenv rootfs
+            uses: actions/cache@v5
+            with:
+                key: "rootfs-${{ steps.keys.outputs.caching-key }}"
+                path: rootfs/
+          - name: Download rootfs
+            if: steps.cache-rootfs.outputs.cache-hit != 'true'
+            run: |
+                set -x
+                curl -o rootfs.tar.gz https://repos.managarm.org/buildenv/managarm-buildenv.tar.gz
+                tar -xzf rootfs.tar.gz
+          - id: cache-xbps
+            name: Cache prebuilt xbps dependencies
+            uses: actions/cache@v5
+            with:
+                key: "xbps-x86_64-${{ steps.keys.outputs.caching-key }}"
+                path: build/xbps-repo/*.xbps
+          - name: Install prerequisites
+            if: steps.cache-xbps.outputs.cache-hit != 'true'
+            run: |
+                set -x
+                pip3 install xbstrap y4
+                xbstrap prereqs cbuildrt xbps
+          - name: Checkout bootstrap-managarm
+            if: steps.cache-xbps.outputs.cache-hit != 'true'
+            uses: actions/checkout@v6
+            with:
+                repository: managarm/bootstrap-managarm
+                ref: "${{ env.BOOTSTRAP_COMMIT }}"
+                path: src/
+          - name: Checkout Nomilia
+            if: steps.cache-xbps.outputs.cache-hit != 'true'
+            uses: actions/checkout@v6
+            with:
+                path: src/managarm/
+                fetch-depth: 0
+          - name: Pull prebuilt dependencies
+            if: steps.cache-xbps.outputs.cache-hit != 'true'
+            run: |
+                set -x
+                touch src/managarm/checkedout.xbstrap
+                mkdir build/
+                cp src/managarm/ci/bootstrap-site-x86_64.yml build/bootstrap-site.yml
+                cd build
+                xbstrap init ../src
+                xbstrap pull-pack -c --deps-of managarm-system
+                xbstrap pull-pack -c --deps-of managarm-system-rs
+                xbstrap pull-pack -c --deps-of managarm-kernel
+                xbstrap pull-pack -c --deps-of weston-desktop
+                # Never cache the packages that Nomilia builds from source.
+                rm -f xbps-repo/managarm-[0-9]*.xbps xbps-repo/managarm-kernel*.xbps xbps-repo/managarm-system*.xbps
+
+    build-package:
+        strategy:
+            matrix:
+                pkg: [managarm-kernel, managarm-kernel-uefi, managarm-system, managarm-system-rs]
+        name: Build ${{ matrix.pkg }} (x86_64)
+        needs: cache-prereqs
+        runs-on: ubuntu-24.04
+        timeout-minutes: 180
+        steps:
+          - name: Permit unprivileged user namespaces
+            run: |
+                set -x
+                sudo sysctl -w kernel.apparmor_restrict_unprivileged_unconfined=0
+                sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          - name: Install prerequisites
+            run: |
+                set -x
+                pip3 install xbstrap y4
+                xbstrap prereqs cbuildrt xbps
+          - name: Restore rootfs cache
+            uses: actions/cache/restore@v5
+            with:
+                key: "rootfs-${{ needs.cache-prereqs.outputs.caching-key }}"
+                path: rootfs/
+                fail-on-cache-miss: true
+          - name: Restore xbps cache
+            uses: actions/cache/restore@v5
+            with:
+                key: "xbps-x86_64-${{ needs.cache-prereqs.outputs.caching-key }}"
+                path: build/xbps-repo/*.xbps
+                fail-on-cache-miss: true
+          - name: Checkout bootstrap-managarm
+            uses: actions/checkout@v6
+            with:
+                repository: managarm/bootstrap-managarm
+                ref: "${{ env.BOOTSTRAP_COMMIT }}"
+                path: src/
+          - name: Checkout Nomilia
+            uses: actions/checkout@v6
+            with:
+                path: src/managarm/
+                fetch-depth: 0
+          - name: Build ${{ matrix.pkg }}
+            run: |
+                set -x
+                touch src/managarm/checkedout.xbstrap
+                cp src/managarm/ci/bootstrap-site-x86_64.yml build/bootstrap-site.yml
+                cd build
+                xbstrap init ../src
+                ~/.xbstrap/bin/xbps-rindex -fa xbps-repo/*.xbps
+                xbstrap configure $CI_BUILD_PKG
+                xbstrap pack $CI_BUILD_PKG
+            env:
+                CI_BUILD_PKG: ${{ matrix.pkg }}
+                XBPS_ARCH: x86_64
+          - name: Upload artifact
+            uses: actions/upload-artifact@v6
+            with:
+                name: "x86_64-${{ matrix.pkg }}"
+                path: "build/xbps-repo/${{ matrix.pkg }}-0*.xbps"
+                if-no-files-found: error
+
+    test-image:
+        name: QEMU boot tests (x86_64)
+        needs:
+          - cache-prereqs
+          - build-package
+        runs-on: ubuntu-24.04
+        timeout-minutes: 180
+        steps:
+          - name: Permit unprivileged user namespaces
+            run: |
+                set -x
+                sudo sysctl -w kernel.apparmor_restrict_unprivileged_unconfined=0
+                sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          - name: Enable KVM group perms
+            run: |
+                echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+                sudo udevadm control --reload-rules
+                sudo udevadm trigger --name-match=kvm
+          - name: Install prerequisites
+            run: |
+                set -x
+                sudo apt-get update
+                sudo apt-get install -y qemu-system-x86
+                pip3 install xbstrap y4
+                xbstrap prereqs cbuildrt xbps
+          - name: Restore rootfs cache
+            uses: actions/cache/restore@v5
+            with:
+                key: "rootfs-${{ needs.cache-prereqs.outputs.caching-key }}"
+                path: rootfs/
+                fail-on-cache-miss: true
+          - name: Restore xbps cache
+            uses: actions/cache/restore@v5
+            with:
+                key: "xbps-x86_64-${{ needs.cache-prereqs.outputs.caching-key }}"
+                path: build/xbps-repo/*.xbps
+                fail-on-cache-miss: true
+          - name: Download built packages
+            uses: actions/download-artifact@v8
+            with:
+                pattern: x86_64-managarm-*
+                path: build/xbps-repo/
+                merge-multiple: true
+          - name: Checkout bootstrap-managarm
+            uses: actions/checkout@v6
+            with:
+                repository: managarm/bootstrap-managarm
+                ref: "${{ env.BOOTSTRAP_COMMIT }}"
+                path: src/
+          - name: Checkout Nomilia
+            uses: actions/checkout@v6
+            with:
+                path: src/managarm/
+                fetch-depth: 0
+          - name: Assemble the image
+            run: |
+                set -x
+                touch src/managarm/checkedout.xbstrap
+                cp src/managarm/ci/bootstrap-site-x86_64.yml build/bootstrap-site.yml
+                cd build
+                xbstrap init ../src
+                ~/.xbstrap/bin/xbps-rindex -fa xbps-repo/*.xbps
+                xbstrap install --only-wanted --deps-of managarm-system-rs
+                xbstrap install --only-wanted --deps-of weston-desktop
+                xbstrap install os-test
+                xbstrap run initialize-empty-image remake-image
+            env:
+                XBPS_ARCH: x86_64
+          - name: Run boot and test suites in QEMU
+            run: |
+                set -x
+                cd build
+                xbstrap run ci-all
+          - name: Upload log files
+            uses: actions/upload-artifact@v6
+            if: ${{ always() }}
+            with:
+                name: "logfiles-x86_64"
+                path: "build/ci-*.txt"
