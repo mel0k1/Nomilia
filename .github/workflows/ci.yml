@@ -70,6 +70,9 @@ jobs:
             with:
                 path: src/managarm/
                 fetch-depth: 0
+          - name: Alias origin/master (xbstrap rolling version)
+            if: steps.cache-xbps.outputs.cache-hit != 'true'
+            run: git -C src/managarm update-ref refs/remotes/origin/master "${{ github.sha }}"
           - name: Pull prebuilt dependencies
             if: steps.cache-xbps.outputs.cache-hit != 'true'
             run: |
@@ -128,6 +131,8 @@ jobs:
             with:
                 path: src/managarm/
                 fetch-depth: 0
+          - name: Alias origin/master (xbstrap rolling version)
+            run: git -C src/managarm update-ref refs/remotes/origin/master "${{ github.sha }}"
           - name: Build ${{ matrix.pkg }}
             run: |
                 set -x
@@ -202,6 +207,8 @@ jobs:
             with:
                 path: src/managarm/
                 fetch-depth: 0
+          - name: Alias origin/master (xbstrap rolling version)
+            run: git -C src/managarm update-ref refs/remotes/origin/master "${{ github.sha }}"
           - name: Assemble the image
             run: |
                 set -x
