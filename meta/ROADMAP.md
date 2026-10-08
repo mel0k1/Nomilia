@@ -31,6 +31,7 @@
 - [x] `exec.cpp`: `AT_CLKTCK`, `AT_HWCAP`, `AT_UID/EUID/GID/EGID` (`AT_PLATFORM` — позже: нужен маппинг строки в образ процесса)
 - [x] Ядро: переочередь фьютексов `helFutexRequeue` (Hel ABI №72: wake N + перенос M в другой слот; cmp-проверка как в `FUTEX_CMP_REQUEUE`); PI-варианты пока не нужны
 - [x] procfs: `cpuinfo` (cpuid+kerncfg), `meminfo` (kerncfg), `loadavg`, `version`, `/proc/[pid]/environ`, `/proc/[pid]/cmdline`; `status`/`maps` уже есть upstream; глобальный `/proc/cmdline` тоже уже есть upstream
+- [~] mlibc: форк [mel0k1/mlibc](https://github.com/mel0k1/mlibc) (ветка `nomilia`, база — пиннутый `880b1ce7`); сделано: `AT_CLKTCK` в `abis/managarm/auxv.h`, sysdep-хук `FutexRequeue` (wiring на `helFutexRequeue`), Linux-совместимый `uname`; CI собирает mlibc из форка
 - [ ] mlibc: слой `linux-sysdeps` — таблица «Linux nr → bragi» для статической musl-персональности
 - [ ] uname: Linux-совместимое `utsname` (имя ядра, версия в формате Linux)
 - [ ] Тест-матрица: busybox (sh, ls, ps, top), статические утилиты
