@@ -793,7 +793,7 @@ async::result<int64_t> linuxGetdents64(Process *self, int fd, uintptr_t bufPtr,
 		if(!entry) {
 			if(entry.error() == managarm::fs::Errors::END_OF_FILE)
 				break;
-			co_return -linuxFsErr(entry.error());
+			co_return -linuxErr(entry.error() | toFsProtoError);
 		}
 
 		size_t nameLen = entry->name.size();
@@ -938,8 +938,8 @@ async::result<int64_t> linuxFAccessat(std::shared_ptr<Process> self, int dirfd,
 		co_return 0;
 
 	uint32_t stMode = stats->mode;
-	uid_t euid = self->euid();
-	gid_t egid = self->egid();
+	uid_t euid = self->threadGroup()->euid();
+	gid_t egid = self->threadGroup()->egid();
 
 	if(euid == 0) {
 		// Root needs at least one x bit for execute checks.
@@ -949,15 +949,16 @@ async::result<int64_t> linuxFAccessat(std::shared_ptr<Process> self, int dirfd,
 	}
 
 	unsigned shift;
-	if(euid == stats->uid) {
+	if((int)euid == stats->uid) {
 		shift = 6;
-	}else if(egid == stats->gid) {
+	}else if((int)egid == stats->gid) {
 		shift = 3;
 	}else{
 		shift = 0;
 	}
 	unsigned granted = (stMode >> shift) & 7;
-	if((mode & granted) != mode)
+	unsigned want = (unsigned)mode;
+	if((want & granted) != want)
 		co_return -EACCES;
 	co_return 0;
 }
@@ -971,6 +972,8 @@ async::result<LinuxSyscallOutcome> handleLinuxSyscall(std::shared_ptr<Process> s
 	uint64_t a1 = args[1];
 	uint64_t a2 = args[2];
 	uint64_t a3 = args[3];
+	uint64_t a4 = args[4];
+	uint64_t a5 = args[5];
 
 	int64_t ret = 0;
 	switch(nr) {
