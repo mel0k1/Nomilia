@@ -715,6 +715,8 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			};
 
 			auto outcome = co_await handleLinuxSyscall(self, thread, nr, args);
+			std::cout << "posix: linux-syscall nr=" << nr << " -> " << outcome.value
+				<< " resume=" << outcome.resume << std::endl;
 
 			if(outcome.resume) {
 				gprs[kHelRegError] = kHelErrNone;
