@@ -24,11 +24,11 @@
 
 namespace thor {
 
-namespace {
-
-// User-space memory helpers implemented in hel.cpp.
+// User-space memory helpers implemented in hel.cpp (external linkage).
 bool readUserMemory(void *kernelPtr, const void *userPtr, size_t size);
 bool writeUserMemory(void *userPtr, const void *kernelPtr, size_t size);
+
+namespace {
 
 // Linux x86_64 errno values, returned as negative syscall results.
 constexpr uint64_t kLinuxEbadf = 9;
