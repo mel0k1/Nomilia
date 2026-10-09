@@ -311,9 +311,9 @@ void fillLinuxStatx(LinuxStatx &stx, const FileStats &fs) {
 	stx.stxIno = fs.inodeNumber;
 	stx.stxSize = fs.fileSize;
 	stx.stxBlocks = (fs.fileSize + 511) / 512;
-	stx.stxAtime = { (int64_t)fs.atimeSecs, fs.atimeNanos, 0 };
-	stx.stxCtime = { (int64_t)fs.ctimeSecs, fs.ctimeNanos, 0 };
-	stx.stxMtime = { (int64_t)fs.mtimeSecs, fs.mtimeNanos, 0 };
+	stx.stxAtime = { (int64_t)fs.atimeSecs, (uint32_t)fs.atimeNanos, 0 };
+	stx.stxCtime = { (int64_t)fs.ctimeSecs, (uint32_t)fs.ctimeNanos, 0 };
+	stx.stxMtime = { (int64_t)fs.mtimeSecs, (uint32_t)fs.mtimeNanos, 0 };
 }
 
 // struct termios in the raw x86_64 Linux ABI (uapi asm/termbits.h, 36 bytes);
