@@ -89,6 +89,13 @@ enum LinuxSyscall : uint64_t {
 	kLinuxNrOpenat = 257,
 	kLinuxNrFstatat = 262,
 	kLinuxNrDup3 = 292,
+	kLinuxNrIoctl = 16,
+	kLinuxNrPipe = 22,
+	kLinuxNrGetdents64 = 217,
+	kLinuxNrFaccessat = 269,
+	kLinuxNrPipe2 = 293,
+	kLinuxNrStatx = 332,
+	kLinuxNrFaccessat2 = 439,
 };
 
 // protocols/posix/supercalls.hpp: superExit. Thor only forwards the number;
@@ -552,6 +559,13 @@ bool linuxHandleSyscall(SyscallImageAccessor image) {
 	case kLinuxNrOpenat:
 	case kLinuxNrFstatat:
 	case kLinuxNrDup3:
+	case kLinuxNrIoctl:
+	case kLinuxNrPipe:
+	case kLinuxNrGetdents64:
+	case kLinuxNrFaccessat:
+	case kLinuxNrFaccessat2:
+	case kLinuxNrStatx:
+	case kLinuxNrPipe2:
 		Thread::interruptCurrent(static_cast<Interrupt>(kIntrSuperCall
 					+ kPosixSuperLinuxSyscall), image, {});
 		return true;

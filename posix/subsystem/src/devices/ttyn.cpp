@@ -276,6 +276,29 @@ private:
 		return _passthrough;
 	}
 
+	// Nomilia: expose terminal state to the Linux personality; the console
+	// has a fixed 80x24 window.
+	async::result<frg::expected<Error, struct termios>> getTermios() override {
+		struct termios attrs;
+		memset(&attrs, 0, sizeof(struct termios));
+		ttyCopyTermios(_activeSettings, attrs);
+		co_return attrs;
+	}
+
+	async::result<frg::expected<Error>> setTermios(const struct termios &attrs) override {
+		ttyCopyTermios(attrs, _activeSettings);
+		co_return frg::success;
+	}
+
+	async::result<frg::expected<Error, struct winsize>> getWinsize() override {
+		struct winsize ws{24, 80, 0, 0};
+		co_return ws;
+	}
+
+	async::result<frg::expected<Error>> setWinsize(const struct winsize &) override {
+		co_return frg::success;
+	}
+
 	helix::UniqueLane _passthrough;
 	async::cancellation_event _cancelServe;
 

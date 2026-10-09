@@ -4,10 +4,16 @@
 // re-runs them through the regular POSIX/VFS APIs of the process.
 #include <errno.h>
 #include <fcntl.h>
+#include <termios.h>
+#include <unistd.h>
+
+#include <asm/ioctls.h>
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -19,6 +25,7 @@
 
 #include <helix/ipc.hpp>
 
+#include "fifo.hpp"
 #include "file.hpp"
 #include "linux-abi.hpp"
 #include "process.hpp"
@@ -39,6 +46,8 @@ constexpr uint64_t kLinuxNrPread64 = 17;
 constexpr uint64_t kLinuxNrPwrite64 = 18;
 constexpr uint64_t kLinuxNrDup = 32;
 constexpr uint64_t kLinuxNrDup2 = 33;
+constexpr uint64_t kLinuxNrIoctl = 16;
+constexpr uint64_t kLinuxNrPipe = 22;
 constexpr uint64_t kLinuxNrGetpid = 39;
 constexpr uint64_t kLinuxNrFork = 57;
 constexpr uint64_t kLinuxNrVfork = 58;
@@ -49,6 +58,11 @@ constexpr uint64_t kLinuxNrGetppid = 110;
 constexpr uint64_t kLinuxNrGettid = 186;
 constexpr uint64_t kLinuxNrOpenat = 257;
 constexpr uint64_t kLinuxNrFstatat = 262;
+constexpr uint64_t kLinuxNrFaccessat = 269;
+constexpr uint64_t kLinuxNrGetdents64 = 217;
+constexpr uint64_t kLinuxNrPipe2 = 293;
+constexpr uint64_t kLinuxNrStatx = 332;
+constexpr uint64_t kLinuxNrFaccessat2 = 439;
 constexpr uint64_t kLinuxNrDup3 = 292;
 
 constexpr int kLinuxAtFdcwd = -100;
@@ -56,7 +70,24 @@ constexpr size_t kLinuxPathMax = 4096;
 constexpr size_t kLinuxStringMax = 65536;
 constexpr size_t kLinuxIoMax = 0x400000; // bounce buffer cap (4 MiB).
 constexpr uint64_t kLinuxAtSymlinkNofollow = 0x100;
+constexpr uint64_t kLinuxAtEmptyPath = 0x1000;
 constexpr uint64_t kLinuxWnohang = 1;
+
+// statx uapi bits (include/uapi/linux/stat.h).
+constexpr uint32_t kStatxType = 0x1;
+constexpr uint32_t kStatxMode = 0x2;
+constexpr uint32_t kStatxNlink = 0x4;
+constexpr uint32_t kStatxUid = 0x8;
+constexpr uint32_t kStatxGid = 0x10;
+constexpr uint32_t kStatxAtime = 0x20;
+constexpr uint32_t kStatxMtime = 0x40;
+constexpr uint32_t kStatxCtime = 0x80;
+constexpr uint32_t kStatxIno = 0x100;
+constexpr uint32_t kStatxSize = 0x200;
+constexpr uint32_t kStatxBlocks = 0x400;
+constexpr uint32_t kStatxBasicMask = kStatxType | kStatxMode | kStatxNlink | kStatxUid
+		| kStatxGid | kStatxAtime | kStatxMtime | kStatxCtime | kStatxIno
+		| kStatxSize | kStatxBlocks;
 
 int64_t linuxErr(Error e) {
 	switch(e) {
@@ -195,6 +226,130 @@ void fillLinuxStat(LinuxStat &st, const FileStats &fs) {
 	st.st_mtimNsec = fs.mtimeNanos;
 	st.st_ctimSec = fs.ctimeSecs;
 	st.st_ctimNsec = fs.ctimeNanos;
+}
+
+// struct linux_dirent64 (uapi): d_type sits before d_name, records are 8-aligned.
+struct LinuxDirent64 {
+	uint64_t d_ino;
+	int64_t d_off;
+	uint16_t d_reclen;
+	uint8_t d_type;
+	char d_name[];
+};
+constexpr size_t kDirent64NameOff = offsetof(LinuxDirent64, d_name);
+
+constexpr uint8_t kDtUnknown = 0;
+constexpr uint8_t kDtFifo = 1;
+constexpr uint8_t kDtChr = 2;
+constexpr uint8_t kDtDir = 4;
+constexpr uint8_t kDtBlk = 6;
+constexpr uint8_t kDtReg = 8;
+constexpr uint8_t kDtLnk = 10;
+constexpr uint8_t kDtSock = 12;
+
+uint8_t mapDtType(int64_t fileType) {
+	if(fileType == (int64_t)managarm::fs::FileType::DIRECTORY)
+		return kDtDir;
+	if(fileType == (int64_t)managarm::fs::FileType::REGULAR)
+		return kDtReg;
+	if(fileType == (int64_t)managarm::fs::FileType::SYMLINK)
+		return kDtLnk;
+	if(fileType == (int64_t)managarm::fs::FileType::SOCKET)
+		return kDtSock;
+	if(fileType == (int64_t)managarm::fs::FileType::CHAR_DEVICE)
+		return kDtChr;
+	if(fileType == (int64_t)managarm::fs::FileType::BLOCK_DEVICE)
+		return kDtBlk;
+	if(fileType == (int64_t)managarm::fs::FileType::FIFO)
+		return kDtFifo;
+	return kDtUnknown;
+}
+
+// struct statx (uapi linux/stat.h), 256 bytes on x86_64.
+struct LinuxStatxTimestamp {
+	int64_t tvSec;
+	uint32_t tvNsec;
+	int32_t reserved_;
+};
+
+struct LinuxStatx {
+	uint32_t stxMask;
+	uint32_t stxBlksize;
+	uint64_t stxAttributes;
+	uint32_t stxNlink;
+	uint32_t stxUid;
+	uint32_t stxGid;
+	uint16_t stxMode;
+	uint16_t spare0_;
+	uint64_t stxIno;
+	uint64_t stxSize;
+	uint64_t stxBlocks;
+	uint64_t stxAttributesMask;
+	LinuxStatxTimestamp stxAtime;
+	LinuxStatxTimestamp stxBtime;
+	LinuxStatxTimestamp stxCtime;
+	LinuxStatxTimestamp stxMtime;
+	uint32_t stxRdevMajor;
+	uint32_t stxRdevMinor;
+	uint32_t stxDevMajor;
+	uint32_t stxDevMinor;
+	uint64_t stxMntId;
+	uint64_t stxDioMemAlign;
+	uint64_t stxDioOffsetAlign;
+	uint64_t spare1_[11];
+};
+static_assert(sizeof(LinuxStatx) == 256);
+
+void fillLinuxStatx(LinuxStatx &stx, const FileStats &fs) {
+	stx.stxMask = kStatxBasicMask;
+	stx.stxBlksize = 4096;
+	stx.stxAttributesMask = 0;
+	stx.stxNlink = fs.numLinks;
+	stx.stxUid = fs.uid;
+	stx.stxGid = fs.gid;
+	stx.stxMode = fs.mode;
+	stx.stxIno = fs.inodeNumber;
+	stx.stxSize = fs.fileSize;
+	stx.stxBlocks = (fs.fileSize + 511) / 512;
+	stx.stxAtime = { (int64_t)fs.atimeSecs, fs.atimeNanos, 0 };
+	stx.stxCtime = { (int64_t)fs.ctimeSecs, fs.ctimeNanos, 0 };
+	stx.stxMtime = { (int64_t)fs.mtimeSecs, fs.mtimeNanos, 0 };
+}
+
+// struct termios in the raw x86_64 Linux ABI (uapi asm/termbits.h, 36 bytes);
+// managarm mlibc's struct termios (NCCS=32) reuses the same flag values.
+struct LinuxTermios {
+	uint32_t c_iflag;
+	uint32_t c_oflag;
+	uint32_t c_cflag;
+	uint32_t c_lflag;
+	uint8_t c_line;
+	uint8_t c_cc[19];
+};
+static_assert(sizeof(LinuxTermios) == 36);
+
+LinuxTermios toLinuxTermios(const struct termios &m) {
+	LinuxTermios t{};
+	t.c_iflag = m.c_iflag;
+	t.c_oflag = m.c_oflag;
+	t.c_cflag = m.c_cflag;
+	t.c_lflag = m.c_lflag;
+	t.c_line = m.c_line;
+	for(size_t i = 0; i < sizeof(t.c_cc); i++)
+		t.c_cc[i] = m.c_cc[i];
+	return t;
+}
+
+struct termios fromLinuxTermios(const LinuxTermios &t) {
+	struct termios m{};
+	m.c_iflag = t.c_iflag;
+	m.c_oflag = t.c_oflag;
+	m.c_cflag = t.c_cflag;
+	m.c_lflag = t.c_lflag;
+	m.c_line = t.c_line;
+	for(size_t i = 0; i < sizeof(t.c_cc); i++)
+		m.c_cc[i] = t.c_cc[i];
+	return m;
 }
 
 async::result<int64_t> linuxRead(Process *self, int fd, uintptr_t bufPtr, size_t count) {
@@ -592,6 +747,221 @@ async::result<int64_t> linuxWait4(Process *self, int pid, uintptr_t statusPtr,
 	co_return (int64_t)outcome.value().pid;
 }
 
+
+// Resolves a path relative to dirfd and returns the node stats (-errno on error).
+async::result<std::expected<FileStats, int64_t>> statsAt(std::shared_ptr<Process> self,
+		int dirfd, std::string path, bool nofollow) {
+	if(path.size() > kLinuxPathMax)
+		co_return std::unexpected(-ENAMETOOLONG);
+
+	ViewPath relative_to;
+	if(dirfd == kLinuxAtFdcwd) {
+		relative_to = self->fsContext()->getWorkingDirectory();
+	}else{
+		auto dir_file = self->fileContext()->getFile(dirfd);
+		if(!dir_file)
+			co_return std::unexpected(-EBADF);
+		relative_to = {dir_file->associatedMount(), dir_file->associatedLink()};
+	}
+
+	PathResolver resolver;
+	resolver.setup(self->fsContext()->getRoot(), relative_to, path, self.get());
+	auto resolveResult = co_await resolver.resolve(
+				nofollow ? resolveDontFollow : ResolveFlags{0});
+	if(!resolveResult)
+		co_return std::unexpected(-linuxFsErr(resolveResult.error()));
+
+	auto stats = co_await resolver.currentLink()->getTarget()->getStats();
+	if(!stats)
+		co_return std::unexpected(-linuxErr(stats.error()));
+	co_return stats.value();
+}
+
+async::result<int64_t> linuxGetdents64(Process *self, int fd, uintptr_t bufPtr,
+		size_t count) {
+	auto file = self->fileContext()->getFile(fd);
+	if(!file)
+		co_return -EBADF;
+	count = std::min<size_t>(count, kLinuxIoMax);
+	if(!count)
+		co_return -EINVAL;
+	auto bounce = std::make_unique<char[]>(count);
+
+	size_t packed = 0;
+	while(true) {
+		auto entry = co_await file->readEntries();
+		if(!entry) {
+			if(entry.error() == managarm::fs::Errors::END_OF_FILE)
+				break;
+			co_return -linuxFsErr(entry.error());
+		}
+
+		size_t nameLen = entry->name.size();
+		size_t reclen = (kDirent64NameOff + nameLen + 1 + 7) & ~size_t(7);
+		if(packed + reclen > count) {
+			if(!packed)
+				co_return -EINVAL; // even one entry does not fit
+			break;
+		}
+
+		auto *d = reinterpret_cast<LinuxDirent64 *>(bounce.get() + packed);
+		d->d_ino = entry->inode;
+		d->d_off = entry->offset;
+		d->d_reclen = reclen;
+		d->d_type = mapDtType(entry->fileType);
+		memcpy(d->d_name, entry->name.data(), nameLen);
+		d->d_name[nameLen] = '\0';
+		memset(bounce.get() + packed + kDirent64NameOff + nameLen + 1, 0,
+				reclen - kDirent64NameOff - nameLen - 1);
+		packed += reclen;
+	}
+
+	if(packed && !co_await memWrite(self->vmContext()->getSpace(),
+					bufPtr, packed, bounce.get()))
+		co_return -EFAULT;
+	co_return (int64_t)packed;
+}
+
+async::result<int64_t> linuxIoctl(Process *self, int fd, uint64_t cmd, uintptr_t argPtr) {
+	auto file = self->fileContext()->getFile(fd);
+	if(!file)
+		co_return -EBADF;
+	auto space = self->vmContext()->getSpace();
+
+	switch(cmd) {
+	case TCGETS: {
+		auto result = co_await file->getTermios();
+		if(!result)
+			co_return -ENOTTY;
+		auto t = toLinuxTermios(result.value());
+		if(!co_await memWrite(space, argPtr, sizeof(t), &t))
+			co_return -EFAULT;
+		co_return 0;
+	}
+	case TCSETS: {
+		LinuxTermios t{};
+		if(!co_await memRead(space, argPtr, sizeof(t), &t))
+			co_return -EFAULT;
+		auto result = co_await file->setTermios(fromLinuxTermios(t));
+		if(!result)
+			co_return -ENOTTY;
+		co_return 0;
+	}
+	case TIOCGWINSZ: {
+		auto result = co_await file->getWinsize();
+		if(!result)
+			co_return -ENOTTY;
+		struct winsize ws = result.value();
+		if(!co_await memWrite(space, argPtr, sizeof(ws), &ws))
+			co_return -EFAULT;
+		co_return 0;
+	}
+	case TIOCSWINSZ: {
+		struct winsize ws{};
+		if(!co_await memRead(space, argPtr, sizeof(ws), &ws))
+			co_return -EFAULT;
+		auto result = co_await file->setWinsize(ws);
+		if(!result)
+			co_return -ENOTTY;
+		co_return 0;
+	}
+	default:
+		std::cout << "posix: linux-abi: unhandled ioctl 0x"
+					<< std::hex << cmd << std::dec << std::endl;
+		co_return -ENOTTY;
+	}
+}
+
+async::result<int64_t> linuxStatx(std::shared_ptr<Process> self, int dirfd,
+		std::string path, uint32_t flags, uintptr_t bufPtr) {
+	FileStats nodeStats;
+	if(path.empty() && (flags & kLinuxAtEmptyPath)) {
+		auto file = self->fileContext()->getFile(dirfd);
+		if(!file)
+			co_return -EBADF;
+		auto link = file->associatedLink();
+		if(!link)
+			co_return -ENOSYS; // sockets/pipes: no associated link yet.
+		auto stats = co_await link->getTarget()->getStats();
+		if(!stats)
+			co_return -linuxErr(stats.error());
+		nodeStats = stats.value();
+	}else{
+		auto stats = co_await statsAt(self, dirfd, std::move(path),
+					flags & kLinuxAtSymlinkNofollow);
+		if(!stats)
+			co_return stats.error();
+		nodeStats = stats.value();
+	}
+
+	if(!bufPtr)
+		co_return -EFAULT;
+	LinuxStatx stx{};
+	fillLinuxStatx(stx, nodeStats);
+	if(!co_await memWrite(self->vmContext()->getSpace(), bufPtr, sizeof(stx), &stx))
+		co_return -EFAULT;
+	co_return 0;
+}
+
+async::result<int64_t> linuxPipe2(Process *self, uintptr_t fdArrayPtr, uint32_t flags) {
+	if(flags & ~(O_CLOEXEC | O_NONBLOCK))
+		co_return -EINVAL;
+
+	auto pair = fifo::createPair(flags & O_NONBLOCK);
+	auto rFd = self->fileContext()->attachFile(pair[0], flags & O_CLOEXEC);
+	if(!rFd)
+		co_return -linuxErr(rFd.error());
+	auto wFd = self->fileContext()->attachFile(pair[1], flags & O_CLOEXEC);
+	if(!wFd) {
+		self->fileContext()->closeFile(rFd.value());
+		co_return -linuxErr(wFd.error());
+	}
+
+	int fds[2] = {(int)rFd.value(), (int)wFd.value()};
+	if(!co_await memWrite(self->vmContext()->getSpace(), fdArrayPtr,
+				sizeof(fds), fds))
+		co_return -EFAULT;
+	co_return 0;
+}
+
+// faccessat/faccessat2: unix permission check against the effective ids.
+async::result<int64_t> linuxFAccessat(std::shared_ptr<Process> self, int dirfd,
+		std::string path, int mode, bool nofollow) {
+	if(mode & ~(R_OK | W_OK | X_OK)) // F_OK == 0
+		co_return -EINVAL;
+
+	auto stats = co_await statsAt(self, dirfd, std::move(path), nofollow);
+	if(!stats)
+		co_return stats.error();
+
+	if(mode == 0)
+		co_return 0;
+
+	uint32_t stMode = stats->mode;
+	uid_t euid = self->euid();
+	gid_t egid = self->egid();
+
+	if(euid == 0) {
+		// Root needs at least one x bit for execute checks.
+		if((mode & X_OK) && !(stMode & 0111))
+			co_return -EACCES;
+		co_return 0;
+	}
+
+	unsigned shift;
+	if(euid == stats->uid) {
+		shift = 6;
+	}else if(egid == stats->gid) {
+		shift = 3;
+	}else{
+		shift = 0;
+	}
+	unsigned granted = (stMode >> shift) & 7;
+	if((mode & granted) != mode)
+		co_return -EACCES;
+	co_return 0;
+}
+
 } // anonymous namespace
 
 async::result<LinuxSyscallOutcome> handleLinuxSyscall(std::shared_ptr<Process> self,
@@ -679,6 +1049,37 @@ async::result<LinuxSyscallOutcome> handleLinuxSyscall(std::shared_ptr<Process> s
 	case kLinuxNrDup:
 		ret = co_await linuxDup(self, (int)a0);
 		break;
+	case kLinuxNrIoctl:
+		ret = co_await linuxIoctl(self.get(), (int)a0, a1, a2);
+		break;
+	case kLinuxNrPipe:
+	case kLinuxNrPipe2:
+		ret = co_await linuxPipe2(self.get(), a0, nr == kLinuxNrPipe ? 0 : (uint32_t)a1);
+		break;
+	case kLinuxNrGetdents64:
+		ret = co_await linuxGetdents64(self.get(), (int)a0, a1, a2);
+		break;
+	case kLinuxNrFaccessat:
+	case kLinuxNrFaccessat2: {
+		auto pathOpt = co_await memReadString(self->vmContext()->getSpace(),
+					a1, kLinuxPathMax);
+		if(!pathOpt) {
+			ret = -EFAULT;
+			break;
+		}
+		ret = co_await linuxFAccessat(self, (int)(int64_t)a0, std::move(*pathOpt),
+					(int)a2, a3 & kLinuxAtSymlinkNofollow);
+	} break;
+	case kLinuxNrStatx: {
+		auto pathOpt = co_await memReadString(self->vmContext()->getSpace(),
+					a1, kLinuxPathMax);
+		if(!pathOpt) {
+			ret = -EFAULT;
+			break;
+		}
+		ret = co_await linuxStatx(self, (int)(int64_t)a0, std::move(*pathOpt),
+					(uint32_t)a2, a4);
+	} break;
 	case kLinuxNrDup2:
 		ret = co_await linuxDup2(self, (int)a0, (int)a1, false, 0);
 		break;

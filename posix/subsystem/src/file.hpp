@@ -14,6 +14,7 @@
 #include <protocols/fs/file-locks.hpp>
 #include <posix.bragi.hpp>
 #include <sys/socket.h>
+#include <termios.h>
 
 #include "common.hpp"
 #include "link-rc.hpp"
@@ -610,6 +611,21 @@ public:
 	virtual async::result<frg::expected<protocols::fs::Error, int>> addSeals(int flags);
 
 	virtual async::result<frg::expected<Error, std::string>> ttyname();
+
+	// Nomilia: terminal state for the Linux personality (TCGETS/TCSETS and
+	// TIOCGWINSZ/TIOCSWINSZ); terminal files override these defaults.
+	virtual async::result<frg::expected<Error, struct termios>> getTermios() {
+		co_return Error::notTerminal;
+	}
+	virtual async::result<frg::expected<Error>> setTermios(const struct termios &) {
+		co_return Error::notTerminal;
+	}
+	virtual async::result<frg::expected<Error, struct winsize>> getWinsize() {
+		co_return Error::notTerminal;
+	}
+	virtual async::result<frg::expected<Error>> setWinsize(const struct winsize &) {
+		co_return Error::notTerminal;
+	}
 
 	virtual async::result<frg::expected<protocols::fs::Error>> setSocketOption(int layer,
 			int number, std::vector<char> optbuf);

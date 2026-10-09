@@ -413,6 +413,37 @@ public:
 		co_return 0;
 	}
 
+	async::result<frg::expected<Error, struct termios>> getTermios() override {
+		struct termios attrs;
+		memset(&attrs, 0, sizeof(struct termios));
+		ttyCopyTermios(_channel->activeSettings, attrs);
+		co_return attrs;
+	}
+
+	async::result<frg::expected<Error>> setTermios(const struct termios &attrs) override {
+		ttyCopyTermios(attrs, _channel->activeSettings);
+		co_return frg::success;
+	}
+
+	async::result<frg::expected<Error, struct winsize>> getWinsize() override {
+		struct winsize ws{};
+		ws.ws_row = _channel->height;
+		ws.ws_col = _channel->width;
+		ws.ws_xpixel = _channel->pixelWidth;
+		ws.ws_ypixel = _channel->pixelHeight;
+		co_return ws;
+	}
+
+	async::result<frg::expected<Error>> setWinsize(const struct winsize &ws) override {
+		_channel->width = ws.ws_col;
+		_channel->height = ws.ws_row;
+		_channel->pixelWidth = ws.ws_xpixel;
+		_channel->pixelHeight = ws.ws_ypixel;
+		UserSignal info;
+		_channel->cts.issueSignalToForegroundGroup(SIGWINCH, info);
+		co_return frg::success;
+	}
+
 	helix::BorrowedDescriptor getPassthroughLane() override {
 		return _passthrough;
 	}
@@ -488,6 +519,37 @@ public:
 
 	async::result<frg::expected<Error, std::string>>
 	ttyname() override;
+
+	async::result<frg::expected<Error, struct termios>> getTermios() override {
+		struct termios attrs;
+		memset(&attrs, 0, sizeof(struct termios));
+		ttyCopyTermios(_channel->activeSettings, attrs);
+		co_return attrs;
+	}
+
+	async::result<frg::expected<Error>> setTermios(const struct termios &attrs) override {
+		ttyCopyTermios(attrs, _channel->activeSettings);
+		co_return frg::success;
+	}
+
+	async::result<frg::expected<Error, struct winsize>> getWinsize() override {
+		struct winsize ws{};
+		ws.ws_row = _channel->height;
+		ws.ws_col = _channel->width;
+		ws.ws_xpixel = _channel->pixelWidth;
+		ws.ws_ypixel = _channel->pixelHeight;
+		co_return ws;
+	}
+
+	async::result<frg::expected<Error>> setWinsize(const struct winsize &ws) override {
+		_channel->width = ws.ws_col;
+		_channel->height = ws.ws_row;
+		_channel->pixelWidth = ws.ws_xpixel;
+		_channel->pixelHeight = ws.ws_ypixel;
+		UserSignal info;
+		_channel->cts.issueSignalToForegroundGroup(SIGWINCH, info);
+		co_return frg::success;
+	}
 
 	void handleClose() override;
 

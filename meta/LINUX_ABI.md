@@ -1,4 +1,4 @@
-# Linux ABI: слой linux-sysdeps (v1 + v2)
+# Linux ABI: слой linux-sysdeps (v1 + v2 + v3)
 
 Цель — исполнять **немодифицированные** Linux-бинарники (в первую очередь статические musl: busybox)
 без пересборки и без патчей к бинарникам. v1 — диспетчер в ядре thor: «сырой» Linux-номер
@@ -137,10 +137,43 @@ write → close → openat(O_RDONLY) → read → побайтовая свер�
 `linux_abi_fork_exec` — fork(57) внутри Linux-персоны, ребёнок пишет и выходит с 44, родитель
 wait4(-1) проверяет `WEXITSTATUS == 44` → exit 45.
 
-## Ограничения v1 и фаза 2
+## Фаза 2 v3: getdents64/ioctl/statx/pipe/faccessat
 
-- **getdents64/ioctl/statx/pipe/faccessat/socket-сисколлы** — следующий заход (нужны для busybox
-  ls/sh/скриптов); pipe и ioctl пойдут тем же upcall-каналом.
+Третий срез добирает то, без чего busybox не стартует и не работает `ls`/`sh`:
+
+- **getdents64(217)** — `File::readEntries()` posix отдаёт по одной записи; обработчик пакует их в
+  uapi-`linux_dirent64` (d_ino/d_off/d_reclen/d_type/d_name, reclen выровнен на 8) в bounce-буфер,
+  пока влезает в `count` пользователя; EOF возвращается как 0, «не влезла даже одна запись» — EINVAL.
+  d_type маппится из `managarm::fs::FileType` (DT_REG/DT_DIR/DT_LNK/DT_SOCK/DT_CHR/DT_BLK/DT_FIFO).
+- **ioctl(16)** — только терминальные команды: TCGETS/TCSETS (termios в сыром Linux-формате
+  x86_64 — 36 байт, c_cc[19]) и TIOCGWINSZ/TIOCSWINSZ (winsize 8 байт). Для этого у `File`
+  появились новые виртуальные методы `getTermios/setTermios/getWinsize/setWinsize` с дефолтом
+  `Error::notTerminal`; переопределены в pts.cpp (Master/Slave: `Channel::activeSettings`,
+  `width/height/pixel*`, TIOCSWINSZ-семантика с SIGWINCH) и devices/ttyn.cpp (консоль: 80x24,
+  `_activeSettings`). Всё остальное — `-ENOTTY` (как в Linux у файлов).
+- **statx(332)** — полный uapi `struct statx` (256 байт, static_assert) из `FileStats`;
+  `stx_mask` = STATX_TYPE|MODE|NLINK|UID|GID|ATIME|MTIME|CTIME|INO|SIZE|BLOCKS; поддержан
+  `AT_EMPTY_PATH` (stat по fd — так glibc делает fstat()); layout проверен юнит-сниппетом
+  (офсеты 0x10/0x1c/0x20/0x40/0x70/0x80/0x90).
+- **pipe(22)/pipe2(293)** — `fifo::createPair()` + attach обоих концов, `int pipefd[2]` копируется
+  в память процесса; O_NONBLOCK/O_CLOEXEC поддержаны, лишние флаги — EINVAL.
+- **faccessat(269)/faccessat2(439)** — разрешение пути через общий хелпер `statsAt()` (dirfd +
+  PathResolver, AT_SYMLINK_NOFOLLOW) и unix-проверка прав против euid/egid процесса (root: всё,
+  кроме X_OK при полном отсутствии x-битов); F_OK — просто существование.
+
+Приёмочный тест `linux_abi_dirstat` (немодифицированный Linux-ELF, exit 46): openat("/tmp",
+O_DIRECTORY) → getdents64 с валидацией цепочки записей (reclen ≥ 24, выравнивание, покрытие
+ret, ненулевой d_ino) → ioctl(1, TIOCGWINSZ) == 0 и ws_col == 80 на консоли (или ENOTTY) →
+pipe2 → write/read через канал → ioctl на pipe fd == -ENOTTY → faccessat("/") == 0 и
+faccessat на отсутствующий путь == -ENOENT → statx("/tmp"): stx_ino ≠ 0, STATX_INO в mask,
+S_IFDIR в stx_mode.
+
+## Ограничения v1, фаза 2 и v3
+
+- **ioctl** покрывает только TCGETS/TCSETS/TIOCG(W)INSZ; FIONREAD/FIONBIO/TIOCGPGRP и прочие —
+  ENOTTY. **socket-сисколлы** (socket/connect/...) — следующий заход.
+- **faccessat** проверяет права по euid/egid (без AT_EACCESS-семантики реальных id) — для
+  busybox-сценариев достаточно.
 - **Отмена операций**: Linux-потоки не подключены к `CancelEventRegistry` — блокирующий read/wait
   не прерывается сигналом (EINTR не эмулируется).
 - **Динамические Linux-бинарники** всё ещё отвергаются: ld.so требует расширенной таблицы сисколлов.
@@ -165,4 +198,7 @@ wait4(-1) проверяет `WEXITSTATUS == 44` → exit 45.
 | `posix/subsystem/src/process.{hpp,cpp}` | `linuxPersonality`, наследование в fork/clone, коммит в exec |
 | `protocols/posix/include/protocols/posix/supercalls.hpp` | `superLinuxSyscall = 19` |
 | `kernel/thor/generic/linux-abi.cpp` | v2: passthrough-блок файловых/процессных номеров |
-| `testsuites/posix-tests/*` | тест + hello.S + gen-hello-blob.py |
+| `posix/subsystem/src/file.hpp` | v3: виртуальные getTermios/setTermios/getWinsize/setWinsize |
+| `posix/subsystem/src/pts.cpp` | v3: терминальные оверрайды (termios/winsize + SIGWINCH) |
+| `posix/subsystem/src/devices/ttyn.cpp` | v3: терминальные оверрайды консоли (80x24) |
+| `testsuites/posix-tests/*` | тесты + hello.S/dirstat.S + gen-hello-blob.py |

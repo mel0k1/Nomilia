@@ -39,7 +39,7 @@
 - [x] uname: Linux-совместимое `utsname` (имя ядра, версия в формате Linux)
 - [ ] Тест-матрица: busybox (sh, ls, ps, top), статические утилиты
 
-**DoD**: `qemu: nomilia /bin/busybox sh` — интерактивная сессия без падений. (v1+v2 выполнены: execve Linux-ELF, файловые сисколлы и fork/exec/wait4 внутри Linux-персональности; для busybox-сессии остаются getdents64/ioctl/statx/pipe — следующий заход)
+**DoD**: `qemu: nomilia /bin/busybox sh` — интерактивная сессия без падений. (v1+v2+v3 выполнены: execve Linux-ELF, файловые сисколлы и fork/exec/wait4, getdents64/ioctl(TCGETS/TCSETS/TIOCGWINSZ)/statx/pipe2/faccessat внутри Linux-персональности; остальное — socket-сисколлы, сигналы rt_sigaction, динамические бинарники)
 
 ## Этап 3 — Linux ABI v2: динамические программы
 
