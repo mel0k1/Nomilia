@@ -29,6 +29,7 @@ src = [
 	'src/inotify.cpp',
 	'src/interval-timer.cpp',
 	'src/link-rc.cpp',
+	'src/linux-abi.cpp',
 	'src/main.cpp',
 	'src/memfd.cpp',
 	'src/net.cpp',

@@ -34,10 +34,12 @@
 - [~] mlibc: форк [mel0k1/mlibc](https://github.com/mel0k1/mlibc) (ветка `nomilia`, база — пиннутый `880b1ce7`); сделано: `AT_CLKTCK` в `abis/managarm/auxv.h`, sysdep-хук `FutexRequeue` (wiring на `helFutexRequeue`), Linux-совместимый `uname`; CI собирает mlibc из форка
 - [~] linux-sysdeps v1 (ядро): personality-флаг процесса (`kHelAbiLinux` в `helCreateThread`) + диспетчер Linux-сисколлов в thor (`linux-abi.cpp`): write→klog, brk/mmap/mprotect/munmap, uname, futex WAIT/WAKE/REQUEUE, clock_gettime/gettimeofday/time, getrandom, arch_prctl, exit_group; детект Linux-ELF в exec.cpp (PT_INTERP `ld-linux*`/`ld-musl*`, GNU ABI-tag)
 - [x] тест `linux_abi_static_hello`: fork + execve немодифицированного статического Linux-ELF (raw syscalls, без libc) → exit 42
+- [x] linux-sysdeps v2 (фаза 2): файловые/процессные Linux-сисколлы через upcall `superLinuxSyscall` (штатный observe-канал posix): open/openat/read/write/close/lseek/stat/lstat/fstat/fstatat/pread64/pwrite64/dup/dup2/dup3/getpid/getppid/gettid/getcwd, fork/vfork/execve/wait4; personality наследуется при fork/clone (abi в `helCreateThread` fork/clone-путей, `ExecuteResult.isLinux`)
+- [x] тесты `linux_abi_files` (open/write/read/lseek roundtrip → exit 43) и `linux_abi_fork_exec` (fork/wait4 внутри Linux-персоны → exit 45)
 - [x] uname: Linux-совместимое `utsname` (имя ядра, версия в формате Linux)
 - [ ] Тест-матрица: busybox (sh, ls, ps, top), статические утилиты
 
-**DoD**: `qemu: nomilia /bin/busybox sh` — интерактивная сессия без падений. (v1 выполнен: execve Linux-ELF работает; clone/fork внутри Linux-персональности и файловые сисколлы — фаза 2)
+**DoD**: `qemu: nomilia /bin/busybox sh` — интерактивная сессия без падений. (v1+v2 выполнены: execve Linux-ELF, файловые сисколлы и fork/exec/wait4 внутри Linux-персональности; для busybox-сессии остаются getdents64/ioctl/statx/pipe — следующий заход)
 
 ## Этап 3 — Linux ABI v2: динамические программы
 

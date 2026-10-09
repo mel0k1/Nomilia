@@ -608,6 +608,15 @@ public:
 		_signalMask = mask;
 	}
 
+	// Nomilia: whether this process executes Linux-personality threads.
+	bool isLinuxPersonality() {
+		return _linuxPersonality;
+	}
+
+	void setLinuxPersonality(bool linux) {
+		_linuxPersonality = linux;
+	}
+
 	uint64_t signalMask() {
 		return _signalMask;
 	}
@@ -758,6 +767,7 @@ private:
 	void *_clientAuxEnd = nullptr;
 
 	uint64_t _signalMask;
+	bool _linuxPersonality = false;
 
 	bool _altStackEnabled = false;
 	uint64_t _altStackSp = 0;

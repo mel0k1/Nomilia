@@ -45,6 +45,22 @@ if host_machine.cpu_family() == 'x86_64'
 	hello_blob = custom_target('linux-hello-blob.c',
 			input : hello_elf, output : 'linux-hello-blob.c',
 			command : [py, files('gen-hello-blob.py'), '@INPUT@', '@OUTPUT@'])
-	src += [hello_blob]
+	files_elf = custom_target('nomilia-linux-files.elf',
+				input : 'linux-hello/hello-file.S', output : 'nomilia-linux-files.elf',
+				command : [meson.get_compiler('c').cmd_array(), '-nostdlib', '-static', '-no-pie',
+						'-Wl,-e,_start', '-Wl,-Ttext=0x400000', '-Wl,--build-id=none',
+						'-o', '@OUTPUT@', '@INPUT@'])
+	files_blob = custom_target('linux-files-blob.c',
+				input : files_elf, output : 'linux-files-blob.c',
+				command : [py, files('gen-hello-blob.py'), '@INPUT@', '@OUTPUT@'])
+	forky_elf = custom_target('nomilia-linux-forky.elf',
+				input : 'linux-hello/forky.S', output : 'nomilia-linux-forky.elf',
+				command : [meson.get_compiler('c').cmd_array(), '-nostdlib', '-static', '-no-pie',
+						'-Wl,-e,_start', '-Wl,-Ttext=0x400000', '-Wl,--build-id=none',
+						'-o', '@OUTPUT@', '@INPUT@'])
+	forky_blob = custom_target('linux-forky-blob.c',
+				input : forky_elf, output : 'linux-forky-blob.c',
+				command : [py, files('gen-hello-blob.py'), '@INPUT@', '@OUTPUT@'])
+	src += [hello_blob, files_blob, forky_blob]
 endif
 executable('posix-tests', src, dependencies: [cli11_dep, frigg], install : true)

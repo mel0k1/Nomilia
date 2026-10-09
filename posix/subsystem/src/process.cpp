@@ -1465,6 +1465,7 @@ async::result<std::shared_ptr<ThreadGroup>> Process::init(std::string path) {
 	process->_clientAuxEnd = execResult.auxEnd;
 	process->_posixLane = std::move(server_lane);
 	process->threadGroup()->didExecute_ = true;
+	process->setLinuxPersonality(execResult.isLinux);
 
 	HEL_CHECK(helGetCredentials(process->_threadDescriptor.getHandle(), 0, process->credentials_.data()));
 
@@ -1554,7 +1555,8 @@ async::result<std::shared_ptr<Process>> Process::fork(std::shared_ptr<Process> o
 
 	HelHandle new_thread;
 	HEL_CHECK(helCreateThread(process->fileContext()->getUniverse().getHandle(),
-			process->vmContext()->getSpace().getHandle(), kHelAbiSystemV,
+			process->vmContext()->getSpace().getHandle(),
+			original->isLinuxPersonality() ? kHelAbiLinux : kHelAbiSystemV,
 			nullptr, nullptr, kHelThreadStopped, &new_thread));
 	process->_threadDescriptor = helix::UniqueDescriptor{new_thread};
 	process->_posixLane = std::move(server_lane);
@@ -1708,7 +1710,8 @@ Process::clone(std::shared_ptr<Process> original, void *ip, void *sp, posix::sup
 
 	HelHandle new_thread;
 	HEL_CHECK(helCreateThread(process->fileContext()->getUniverse().getHandle(),
-			process->vmContext()->getSpace().getHandle(), kHelAbiSystemV,
+			process->vmContext()->getSpace().getHandle(),
+			original->isLinuxPersonality() ? kHelAbiLinux : kHelAbiSystemV,
 			ip, sp, kHelThreadStopped, &new_thread));
 	process->_threadDescriptor = helix::UniqueDescriptor{new_thread};
 
@@ -1826,6 +1829,7 @@ async::result<Error> Process::exec(std::shared_ptr<Process> process,
 	process->threadGroup()->cmdline() = std::move(execResult.args);
 	process->threadGroup()->environment() = std::move(execResult.env);
 	process->threadGroup()->didExecute_ = true;
+	process->setLinuxPersonality(execResult.isLinux);
 	HEL_CHECK(helGetCredentials(process->_threadDescriptor.getHandle(), 0, process->credentials_.data()));
 
 	auto generation = std::make_shared<Generation>();

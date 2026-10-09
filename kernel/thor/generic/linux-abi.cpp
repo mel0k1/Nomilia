@@ -69,11 +69,36 @@ enum LinuxSyscall : uint64_t {
 	kLinuxNrExitGroup = 231,
 	kLinuxNrSetRobustList = 273,
 	kLinuxNrGetrandom = 318,
+	// Forwarded to the POSIX subsystem via the observe upcall.
+	kLinuxNrOpen = 2,
+	kLinuxNrClose = 3,
+	kLinuxNrStat = 4,
+	kLinuxNrFstat = 5,
+	kLinuxNrLstat = 6,
+	kLinuxNrLseek = 8,
+	kLinuxNrPread64 = 17,
+	kLinuxNrPwrite64 = 18,
+	kLinuxNrDup = 32,
+	kLinuxNrDup2 = 33,
+	kLinuxNrFork = 57,
+	kLinuxNrVfork = 58,
+	kLinuxNrExecve = 59,
+	kLinuxNrWait4 = 61,
+	kLinuxNrGetcwd = 79,
+	kLinuxNrGetppid = 110,
+	kLinuxNrOpenat = 257,
+	kLinuxNrFstatat = 262,
+	kLinuxNrDup3 = 292,
 };
 
 // protocols/posix/supercalls.hpp: superExit. Thor only forwards the number;
 // posix performs the full process death flow when it observes it.
 constexpr uint64_t kPosixSuperExit = 4;
+
+// protocols/posix/supercalls.hpp: superLinuxSyscall. File/process Linux
+// syscalls interrupt the thread; posix observes it, serves the call through
+// its VFS and resumes the thread with the result in RAX.
+constexpr uint64_t kPosixSuperLinuxSyscall = 19;
 
 // Per-address-space state for the Linux ABI (program break, clear_child_tid).
 struct LinuxAsState {
@@ -136,35 +161,6 @@ bool linuxHandleSyscall(SyscallImageAccessor image) {
 	auto ret = [&](uint64_t v) { *image.in2() = v; };
 
 	switch(nr) {
-	case kLinuxNrWrite: {
-		int fd = (int)a0;
-		if(fd != 1 && fd != 2) {
-			ret(-kLinuxEbadf);
-			break;
-		}
-		size_t count = (size_t)a2;
-		auto uptr = reinterpret_cast<const char *>(a1);
-		size_t done = 0;
-		bool fault = false;
-		while(done < count) {
-			char buffer[129];
-			size_t chunk = count - done < 128 ? count - done : 128;
-			if(!readUserMemory(buffer, uptr + done, chunk)) {
-				fault = true;
-				break;
-			}
-			buffer[chunk] = 0;
-			// TODO: real fd plumbing instead of kernel-log output.
-			infoLogger() << "linux-abi[write] " << thisThread.get()
-				<< ": " << reinterpret_cast<const char *>(buffer) << frg::endlog;
-			done += chunk;
-		}
-		ret(fault ? -kLinuxEfault : (uint64_t)done);
-	} break;
-	case kLinuxNrRead:
-		// TODO: forward fd-based syscalls to the POSIX subsystem.
-		ret(-kLinuxEnosys);
-		break;
 	case kLinuxNrMmap: {
 		uintptr_t addr = a0;
 		size_t length = (size_t)a1;
@@ -325,10 +321,6 @@ bool linuxHandleSyscall(SyscallImageAccessor image) {
 		}
 		ret(0);
 	} break;
-	case kLinuxNrGetpid:
-	case kLinuxNrGettid:
-		ret(1); // The kernel has no pids; musl only caches the value.
-		break;
 	case kLinuxNrGetuid:
 	case kLinuxNrGeteuid:
 	case kLinuxNrGetgid:
@@ -534,6 +526,35 @@ bool linuxHandleSyscall(SyscallImageAccessor image) {
 			ret(-kLinuxEnosys);
 		}
 	} break;
+	// File/process syscalls run in the POSIX subsystem. The registers are
+	// left untouched so that posix can decode the Linux call from them
+	// (nr in RAX, args in RDI/RSI/RDX/R10/R8/R9) and resume with -errno.
+	case kLinuxNrRead:
+	case kLinuxNrWrite:
+	case kLinuxNrOpen:
+	case kLinuxNrClose:
+	case kLinuxNrStat:
+	case kLinuxNrFstat:
+	case kLinuxNrLstat:
+	case kLinuxNrLseek:
+	case kLinuxNrPread64:
+	case kLinuxNrPwrite64:
+	case kLinuxNrDup:
+	case kLinuxNrDup2:
+	case kLinuxNrGetpid:
+	case kLinuxNrFork:
+	case kLinuxNrVfork:
+	case kLinuxNrExecve:
+	case kLinuxNrWait4:
+	case kLinuxNrGetcwd:
+	case kLinuxNrGetppid:
+	case kLinuxNrGettid:
+	case kLinuxNrOpenat:
+	case kLinuxNrFstatat:
+	case kLinuxNrDup3:
+		Thread::interruptCurrent(static_cast<Interrupt>(kIntrSuperCall
+					+ kPosixSuperLinuxSyscall), image, {});
+		return true;
 	default:
 		warningLogger() << "linux-abi: unimplemented syscall " << nr << frg::endlog;
 		ret(-kLinuxEnosys);

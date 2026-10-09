@@ -1,10 +1,10 @@
-# Linux ABI: слой linux-sysdeps (v1)
+# Linux ABI: слой linux-sysdeps (v1 + v2)
 
 Цель — исполнять **немодифицированные** Linux-бинарники (в первую очередь статические musl: busybox)
-без пересборки и без патчей к бинарникам. Слой живёт в ядре thor: Linux-сисколл принимается по
-«сырому» Linux-номеру и исполняется поверх внутренних примитивов thor (`AllocatedMemory`,
-`VirtualSpace`, `FutexRealm`, MSR FS/GS, PRNG). Это первый вертикальный срез; файловые операции и
-форк — фаза 2 (см. конец документа).
+без пересборки и без патчей к бинарникам. v1 — диспетчер в ядре thor: «сырой» Linux-номер
+исполняется поверх внутренних примитивов thor (`AllocatedMemory`, `VirtualSpace`, `FutexRealm`,
+MSR FS/GS, PRNG). v2 (фаза 2) — файловые и процессные сисколлы через upcall в posix-подсистему
+(см. раздел «Фаза 2» ниже).
 
 ## Как работает
 
@@ -68,14 +68,14 @@ personality, а не по диапазону номеров.
 
 | nr  | сисколл       | статус | примечание |
 |-----|---------------|--------|------------|
-| 1   | write         | частично | fd 1/2 → kernel log (сниппет в QEMU-лог); остальные fd → `-EBADF` |
+| 1   | write         | v2 | fd-путь через posix-подсистему (upcall) |
 | 9   | mmap          | да | анонимные private-маппинги; MAP_FIXED уважается; file-backed → `-ENOSYS` |
 | 10  | mprotect      | да | через `VirtualSpace::protect` |
 | 11  | munmap        | да | |
 | 12  | brk           | да | per-AS состояние, база 0x10000000, лимит 128 МиБ; при ошибке — текущий brk (семантика Linux) |
 | 24  | sched_yield   | да | `Thread::deferCurrent()` |
 | 28  | madvise       | да | no-op |
-| 39/186 | getpid/gettid | заглушка | всегда 1 (в ядре нет pids) |
+| 39/186 | getpid/gettid | v2 | настоящие pid/tid через posix (upcall) |
 | 63  | uname         | да | `Linux/nomilia/6.1.0-nomilia/x86_64` — совместимо с mlibc-форком |
 | 96  | gettimeofday  | частично | monotonic-время; wall-clock смещение — TODO |
 | 102–108 | getuid/euid/gid/egid | заглушка | 0 |
@@ -97,18 +97,55 @@ personality, а не по диапазону номеров.
 родитель ждёт `exit(42)`. Проверяет всю цепочку: детект → personality → свой entry → write →
 exit_group → waitpid. Запускается в QEMU как часть `ci-posix-tests`.
 
+## Фаза 2: файловые и процессные сисколлы через upcall в posix (v2)
+
+VFS posix-подсистемы уже умеет всё нужное (PathResolver, file table, pipe/tty/socket-файлы), поэтому
+второй вертикальный срез не дублирует её в ядре, а делегирует ей операции. Канал — **не** новое
+bragi-сообщение, а штатный observe-канал, которым thor и posix уже обмениваются событиями потоков:
+
+1. thor (`linux-abi.cpp`): файловые/процессные Linux-номера попадают в passthrough-блок — регистры
+   **не трогаются** (nr остаётся в RAX, аргументы в RDI/RSI/RDX/R10/R8/R9), поток прерывается
+   `Thread::interruptCurrent(kIntrSuperCall + posix::superLinuxSyscall)` и уходит в суперколл-состояние;
+2. posix (`observations.cpp`): `observeThread` получает `kHelObserveSuperCall + superLinuxSyscall`,
+   читает gprs (`kHelRegArg2` = nr и т.д.) и вызывает `handleLinuxSyscall()`
+   (`posix/subsystem/src/linux-abi.cpp`);
+3. обработчик транслирует вызов в обычные POSIX/VFS API процесса (`fileContext()`, `fsContext()`,
+   `PathResolver`, `helix_ng::readMemory/writeMemory` для буферов/путей) и возвращает
+   `LinuxSyscallOutcome{resume, value}`;
+4. posix пишет `gprs[kHelRegArg2] = value` (Linux-результат или `-errno` в RAX),
+   `gprs[kHelRegError] = kHelErrNone` и делает `helStoreRegisters` + `helResume` — поток
+   продолжается с возврата из сисколла.
+
+Особые пути: `fork/vfork` клонируют процесс (`Process::fork`), копируют program/thread-регистры
+ребёнку, ставят ребёнку RAX=0, резюмят обоих (родитель получает pid); `execve` читает path/argv/envp
+из памяти процесса и запускает `Process::exec` (он сам убивает старый поток, строит новый образ и
+резюмит — при успехе upcall-резюм не нужен); `wait4` блокирует волокно observeThread процесса на
+`Process::wait` (штатный notify-механизм, дети других процессов не блокируются).
+
+Personality наследуется: `Process` хранит `linuxPersonality` (поле + `isLinuxPersonality()`), её
+проставляет `ExecuteResult.isLinux` из детекта в `exec.cpp`; `Process::fork`/`Process::clone`
+создают поток ребёнка с `kHelAbiLinux` вместо `kHelAbiSystemV`, ядро выставляет
+`Thread::kFlagLinuxPersonality` — и Linux-потоки переживают fork/clone без особых путей.
+
+Реализовано (x86_64): open(2)/openat(257) с Linux-флагами (O_CREAT/O_EXCL/O_TRUNC/O_APPEND/
+O_NONBLOCK/O_DIRECTORY/O_NOFOLLOW/O_CLOEXEC/O_PATH), read/write/close, lseek, stat/lstat/fstat/
+fstatat (Linux `struct stat`, 144 байта), pread64/pwrite64, dup/dup2/dup3, getpid/getppid/gettid,
+getcwd, fork/vfork/execve/wait4. Ошибки — Linux-errno (отрицательные значения в RAX).
+
+Приёмочные тесты: `linux_abi_files` — немодифицированный Linux-ELF делает openat(O_CREAT|O_RDWR) →
+write → close → openat(O_RDONLY) → read → побайтовая сверка → lseek(SEEK_END) → exit 43;
+`linux_abi_fork_exec` — fork(57) внутри Linux-персоны, ребёнок пишет и выходит с 44, родитель
+wait4(-1) проверяет `WEXITSTATUS == 44` → exit 45.
+
 ## Ограничения v1 и фаза 2
 
-- **Файловые сисколлы** (openat/read/close/stat/…) — ключевой пробел. План: upcall из thor в
-  posix-подсистему (новое bragi-сообщение «LinuxSyscall»), posix исполняет их своей штатной
-  машинерией (fd-таблицы уже там) — это и есть полная таблица «Linux nr → bragi» из роадмапа.
-- **clone/fork внутри Linux-персональности**: posix должен наследовать abi при создании потоков
-  fork-путём; после этого execve внутри Linux-процесса открывает busybox-апплеты.
-- **execve из Linux-программы**: требует файлового upcall (см. выше).
+- **getdents64/ioctl/statx/pipe/faccessat/socket-сисколлы** — следующий заход (нужны для busybox
+  ls/sh/скриптов); pipe и ioctl пойдут тем же upcall-каналом.
+- **Отмена операций**: Linux-потоки не подключены к `CancelEventRegistry` — блокирующий read/wait
+  не прерывается сигналом (EINTR не эмулируется).
+- **Динамические Linux-бинарники** всё ещё отвергаются: ld.so требует расширенной таблицы сисколлов.
 - **CLOCK_REALTIME** в ядре пока boot-relative; для mlibc-программ точное время даёт vDSO/tracker.
-- **exit_group** завершает только текущий поток (в thor нет списка потоков процесса) — для v1
-  Linux-программы однопоточные; полный kill-group делает posix.
-- **pids/uid** — заглушки; придут вместе с файловым upcall.
+- **pids/uid** — getpid/getppid/gettid настоящие; uid-семейство пока заглушки в ядре.
 - Детект по ABI-tag/интерпретатору покрывает glibc-статик, musl-динамик и наш тест; glibc-динамик
   и «голый» musl-статик (без note) пока не различить — будет явный маркер на этапе файлового слоя.
 
@@ -122,5 +159,10 @@ exit_group → waitpid. Запускается в QEMU как часть `ci-pos
 | `kernel/thor/generic/main.cpp` | include + 7-строчный хук диспетчера |
 | `kernel/thor/generic/linux-abi.cpp` `.hpp` | новые (таблица Linux-сисколлов) |
 | `kernel/thor/meson.build` | +1 источник |
-| `posix/subsystem/src/exec.cpp` | детект Linux-ELF, guard ld.so, abi/entry |
+| `posix/subsystem/src/exec.cpp` | детект Linux-ELF, guard ld.so, abi/entry, `ExecuteResult.isLinux` |
+| `posix/subsystem/src/linux-abi.cpp` `.hpp` | новые (v2: обработчик upcall, VFS-трансляция) |
+| `posix/subsystem/src/observations.cpp` | ветка `superLinuxSyscall` в observeThread |
+| `posix/subsystem/src/process.{hpp,cpp}` | `linuxPersonality`, наследование в fork/clone, коммит в exec |
+| `protocols/posix/include/protocols/posix/supercalls.hpp` | `superLinuxSyscall = 19` |
+| `kernel/thor/generic/linux-abi.cpp` | v2: passthrough-блок файловых/процессных номеров |
 | `testsuites/posix-tests/*` | тест + hello.S + gen-hello-blob.py |

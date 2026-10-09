@@ -521,6 +521,7 @@ execute(ViewPath root, ViewPath workdir,
 		.effectiveGid = newGid,
 		.savedUid = self->threadGroup()->uid(),
 		.savedGid = self->threadGroup()->gid(),
+		.isLinux = execInfo.isLinux,
 		.args = std::move(args),
 		.env = std::move(env)
 	};

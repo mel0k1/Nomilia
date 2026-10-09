@@ -5,6 +5,8 @@
 #include "observations.hpp"
 #include "ostrace.hpp"
 
+#include "linux-abi.hpp"
+
 #include <frg/scope_exit.hpp>
 #include <protocols/posix/data.hpp>
 #include <protocols/posix/supercalls.hpp>
@@ -698,6 +700,29 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 
 			HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
 			HEL_CHECK(helResume(thread.getHandle()));
+		}else if(observe.observation() == kHelObserveSuperCall + posix::superLinuxSyscall) {
+			if(logRequests)
+				std::cout << "posix: linux-syscall supercall" << std::endl;
+
+			uintptr_t gprs[kHelNumGprs];
+			HEL_CHECK(helLoadRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
+
+			// Linux x86_64 convention: nr in RAX, args in RDI/RSI/RDX/R10/R8/R9.
+			uint64_t nr = gprs[kHelRegArg2];
+			std::array<uint64_t, 6> args{
+				gprs[kHelRegNumber], gprs[kHelRegArg0], gprs[kHelRegArg1],
+				gprs[kHelRegArg5], gprs[kHelRegArg3], gprs[kHelRegArg4]
+			};
+
+			auto outcome = co_await handleLinuxSyscall(self, thread, nr, args);
+
+			if(outcome.resume) {
+				gprs[kHelRegError] = kHelErrNone;
+				// Linux returns the result (or -errno) in RAX.
+				gprs[kHelRegArg2] = static_cast<uint64_t>(outcome.value);
+				HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
+				HEL_CHECK(helResume(thread.getHandle()));
+			}
 		}else if(observe.observation() == kHelObserveInterrupt) {
 			// std::println("Process {} ({}) was interrupted forceTermination={}", self->name(), self->pid(), self->forceTermination);
 			if (self->forceTermination) {

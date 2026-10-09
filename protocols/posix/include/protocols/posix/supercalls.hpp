@@ -22,6 +22,7 @@ inline constexpr uint32_t superSigGetPending = 15;
 inline constexpr uint32_t superSigTimedWait = 16;
 inline constexpr uint32_t superThreadExit = 17;
 inline constexpr uint32_t superCancel = 18;
+inline constexpr uint32_t superLinuxSyscall = 19;
 
 // Supercall numbers >= 64 are used by the svrctl protocol.
 

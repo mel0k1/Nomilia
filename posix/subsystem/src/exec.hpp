@@ -10,6 +10,8 @@ struct ExecuteResult {
 	gid_t effectiveGid = 0;
 	uid_t savedUid = 0;
 	gid_t savedGid = 0;
+	// Nomilia: whether the loaded image runs with the Linux personality.
+	bool isLinux = false;
 	// Final argv/environ, served via /proc/[pid]/{cmdline,environ}.
 	std::vector<std::string> args;
 	std::vector<std::string> env;
