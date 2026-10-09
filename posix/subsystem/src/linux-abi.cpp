@@ -793,7 +793,7 @@ async::result<int64_t> linuxGetdents64(Process *self, int fd, uintptr_t bufPtr,
 		if(!entry) {
 			if(entry.error() == managarm::fs::Errors::END_OF_FILE)
 				break;
-			co_return -linuxErr(entry.error() | toFsProtoError);
+			co_return -linuxFsErr(entry.error() | protocols::fs::toFsProtoError);
 		}
 
 		size_t nameLen = entry->name.size();
@@ -973,7 +973,6 @@ async::result<LinuxSyscallOutcome> handleLinuxSyscall(std::shared_ptr<Process> s
 	uint64_t a2 = args[2];
 	uint64_t a3 = args[3];
 	uint64_t a4 = args[4];
-	uint64_t a5 = args[5];
 
 	int64_t ret = 0;
 	switch(nr) {
