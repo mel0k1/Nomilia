@@ -421,7 +421,8 @@ public:
 	}
 
 	async::result<frg::expected<Error>> setTermios(const struct termios &attrs) override {
-		ttyCopyTermios(attrs, _channel->activeSettings);
+		struct termios copy = attrs;
+		ttyCopyTermios(copy, _channel->activeSettings);
 		co_return frg::success;
 	}
 
@@ -528,7 +529,8 @@ public:
 	}
 
 	async::result<frg::expected<Error>> setTermios(const struct termios &attrs) override {
-		ttyCopyTermios(attrs, _channel->activeSettings);
+		struct termios copy = attrs;
+		ttyCopyTermios(copy, _channel->activeSettings);
 		co_return frg::success;
 	}
 

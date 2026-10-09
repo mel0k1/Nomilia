@@ -286,7 +286,8 @@ private:
 	}
 
 	async::result<frg::expected<Error>> setTermios(const struct termios &attrs) override {
-		ttyCopyTermios(attrs, _activeSettings);
+		struct termios copy = attrs;
+		ttyCopyTermios(copy, _activeSettings);
 		co_return frg::success;
 	}
 
