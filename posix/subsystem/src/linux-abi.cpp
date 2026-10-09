@@ -211,10 +211,24 @@ struct LinuxStat {
 };
 static_assert(sizeof(LinuxStat) == 144);
 
-void fillLinuxStat(LinuxStat &st, const FileStats &fs) {
+// Linux puts the file type into st_mode; managarm keeps it in VfsType.
+uint32_t linuxFileType(VfsType type) {
+	switch(type) {
+	case VfsType::directory: return 0x4000; // S_IFDIR
+	case VfsType::regular: return 0x8000;   // S_IFREG
+	case VfsType::charDevice: return 0x2000; // S_IFCHR
+	case VfsType::blockDevice: return 0x6000; // S_IFBLK
+	case VfsType::fifo: return 0x1000;      // S_IFIFO
+	case VfsType::symlink: return 0xA000;   // S_IFLNK
+	case VfsType::socket: return 0xC000;    // S_IFSOCK
+	default: return 0;
+	}
+}
+
+void fillLinuxStat(LinuxStat &st, const FileStats &fs, VfsType type) {
 	st.st_ino = fs.inodeNumber;
 	st.st_nlink = fs.numLinks;
-	st.st_mode = fs.mode;
+	st.st_mode = linuxFileType(type) | (fs.mode & 07777);
 	st.st_uid = fs.uid;
 	st.st_gid = fs.gid;
 	st.st_size = fs.fileSize;
@@ -300,14 +314,14 @@ struct LinuxStatx {
 };
 static_assert(sizeof(LinuxStatx) == 256);
 
-void fillLinuxStatx(LinuxStatx &stx, const FileStats &fs) {
+void fillLinuxStatx(LinuxStatx &stx, const FileStats &fs, VfsType type) {
 	stx.stxMask = kStatxBasicMask;
 	stx.stxBlksize = 4096;
 	stx.stxAttributesMask = 0;
 	stx.stxNlink = fs.numLinks;
 	stx.stxUid = fs.uid;
 	stx.stxGid = fs.gid;
-	stx.stxMode = fs.mode;
+	stx.stxMode = linuxFileType(type) | (fs.mode & 07777);
 	stx.stxIno = fs.inodeNumber;
 	stx.stxSize = fs.fileSize;
 	stx.stxBlocks = (fs.fileSize + 511) / 512;
@@ -576,7 +590,7 @@ async::result<int64_t> statByPath(std::shared_ptr<Process> self, int dirfd,
 	if(!bufPtr)
 		co_return -EFAULT;
 	LinuxStat st{};
-	fillLinuxStat(st, stats.value());
+	fillLinuxStat(st, stats.value(), link->getTarget()->getType());
 	if(!co_await memWrite(self->vmContext()->getSpace(), bufPtr, sizeof(st), &st))
 		co_return -EFAULT;
 	co_return 0;
@@ -595,7 +609,7 @@ async::result<int64_t> linuxFstat(Process *self, int fd, uintptr_t bufPtr) {
 	if(!bufPtr)
 		co_return -EFAULT;
 	LinuxStat st{};
-	fillLinuxStat(st, stats.value());
+	fillLinuxStat(st, stats.value(), link->getTarget()->getType());
 	if(!co_await memWrite(self->vmContext()->getSpace(), bufPtr, sizeof(st), &st))
 		co_return -EFAULT;
 	co_return 0;
@@ -748,9 +762,10 @@ async::result<int64_t> linuxWait4(Process *self, int pid, uintptr_t statusPtr,
 }
 
 
-// Resolves a path relative to dirfd and returns the node stats (-errno on error).
-async::result<std::expected<FileStats, int64_t>> statsAt(std::shared_ptr<Process> self,
-		int dirfd, std::string path, bool nofollow) {
+// Resolves a path relative to dirfd and returns the node stats plus the
+// VFS node type (-errno on error).
+async::result<std::expected<std::pair<FileStats, VfsType>, int64_t>> statsAt(
+		std::shared_ptr<Process> self, int dirfd, std::string path, bool nofollow) {
 	if(path.size() > kLinuxPathMax)
 		co_return std::unexpected(-ENAMETOOLONG);
 
@@ -771,10 +786,11 @@ async::result<std::expected<FileStats, int64_t>> statsAt(std::shared_ptr<Process
 	if(!resolveResult)
 		co_return std::unexpected(-linuxFsErr(resolveResult.error()));
 
-	auto stats = co_await resolver.currentLink()->getTarget()->getStats();
+	auto target = resolver.currentLink()->getTarget();
+	auto stats = co_await target->getStats();
 	if(!stats)
 		co_return std::unexpected(-linuxErr(stats.error()));
-	co_return stats.value();
+	co_return std::make_pair(stats.value(), target->getType());
 }
 
 async::result<int64_t> linuxGetdents64(Process *self, int fd, uintptr_t bufPtr,
@@ -875,6 +891,7 @@ async::result<int64_t> linuxIoctl(Process *self, int fd, uint64_t cmd, uintptr_t
 async::result<int64_t> linuxStatx(std::shared_ptr<Process> self, int dirfd,
 		std::string path, uint32_t flags, uintptr_t bufPtr) {
 	FileStats nodeStats;
+	VfsType nodeType = VfsType::null;
 	if(path.empty() && (flags & kLinuxAtEmptyPath)) {
 		auto file = self->fileContext()->getFile(dirfd);
 		if(!file)
@@ -886,18 +903,20 @@ async::result<int64_t> linuxStatx(std::shared_ptr<Process> self, int dirfd,
 		if(!stats)
 			co_return -linuxErr(stats.error());
 		nodeStats = stats.value();
+		nodeType = link->getTarget()->getType();
 	}else{
 		auto stats = co_await statsAt(self, dirfd, std::move(path),
 					flags & kLinuxAtSymlinkNofollow);
 		if(!stats)
 			co_return stats.error();
-		nodeStats = stats.value();
+		nodeStats = stats->first;
+		nodeType = stats->second;
 	}
 
 	if(!bufPtr)
 		co_return -EFAULT;
 	LinuxStatx stx{};
-	fillLinuxStatx(stx, nodeStats);
+	fillLinuxStatx(stx, nodeStats, nodeType);
 	if(!co_await memWrite(self->vmContext()->getSpace(), bufPtr, sizeof(stx), &stx))
 		co_return -EFAULT;
 	co_return 0;
@@ -937,7 +956,7 @@ async::result<int64_t> linuxFAccessat(std::shared_ptr<Process> self, int dirfd,
 	if(mode == 0)
 		co_return 0;
 
-	uint32_t stMode = stats->mode;
+	uint32_t stMode = stats->first.mode;
 	uid_t euid = self->threadGroup()->euid();
 	gid_t egid = self->threadGroup()->egid();
 
@@ -949,9 +968,9 @@ async::result<int64_t> linuxFAccessat(std::shared_ptr<Process> self, int dirfd,
 	}
 
 	unsigned shift;
-	if((int)euid == stats->uid) {
+	if((int)euid == stats->first.uid) {
 		shift = 6;
-	}else if((int)egid == stats->gid) {
+	}else if((int)egid == stats->first.gid) {
 		shift = 3;
 	}else{
 		shift = 0;
