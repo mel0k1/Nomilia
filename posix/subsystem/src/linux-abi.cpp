@@ -170,30 +170,31 @@ struct LinuxStat {
 	int64_t st_size;
 	int64_t st_blksize;
 	int64_t st_blocks;
-	int64_t st_atime;
-	int64_t st_atime_nsec;
-	int64_t st_mtime;
-	int64_t st_mtime_nsec;
-	int64_t st_ctime;
-	int64_t st_ctime_nsec;
+	int64_t st_atimSec;
+	int64_t st_atimNsec;
+	int64_t st_mtimSec;
+	int64_t st_mtimNsec;
+	int64_t st_ctimSec;
+	int64_t st_ctimNsec;
 	int64_t __spare[3];
 };
 static_assert(sizeof(LinuxStat) == 144);
 
 void fillLinuxStat(LinuxStat &st, const FileStats &fs) {
-	st.st_nlink = fs.linkCount;
+	st.st_ino = fs.inodeNumber;
+	st.st_nlink = fs.numLinks;
 	st.st_mode = fs.mode;
 	st.st_uid = fs.uid;
 	st.st_gid = fs.gid;
 	st.st_size = fs.fileSize;
 	st.st_blksize = 4096;
 	st.st_blocks = (fs.fileSize + 511) / 512;
-	st.st_atime = fs.accessTime.tv_sec;
-	st.st_atime_nsec = fs.accessTime.tv_nsec;
-	st.st_mtime = fs.dataModifyTime.tv_sec;
-	st.st_mtime_nsec = fs.dataModifyTime.tv_nsec;
-	st.st_ctime = fs.anyChangeTime.tv_sec;
-	st.st_ctime_nsec = fs.anyChangeTime.tv_nsec;
+	st.st_atimSec = fs.atimeSecs;
+	st.st_atimNsec = fs.atimeNanos;
+	st.st_mtimSec = fs.mtimeSecs;
+	st.st_mtimNsec = fs.mtimeNanos;
+	st.st_ctimSec = fs.ctimeSecs;
+	st.st_ctimNsec = fs.ctimeNanos;
 }
 
 async::result<int64_t> linuxRead(Process *self, int fd, uintptr_t bufPtr, size_t count) {
@@ -324,7 +325,7 @@ async::result<int64_t> openAtImpl(std::shared_ptr<Process> self, int dirfd,
 				self.get(), resolver.nextComponent(),
 				mode & ~self->fsContext()->getUmask(), flags & O_EXCL);
 		if(!linkResult)
-			co_return -linuxFsErr(linkResult.error());
+			co_return -linuxErr(linkResult.error());
 		auto link = linkResult.value();
 		auto node = link->getTarget();
 		if(node->getType() == VfsType::directory)
