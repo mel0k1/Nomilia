@@ -576,7 +576,10 @@ void handleSyscall(SyscallImageAccessor image) {
 
 	// Nomilia: Linux-ABI binaries dispatch through a separate syscall table.
 	if(this_thread->flags & Thread::kFlagLinuxPersonality) {
-		linuxHandleSyscall(image);
+		// The exit path interrupts the thread for posix to observe, skipping
+		// condition handling (like the managarm supercall path).
+		if(linuxHandleSyscall(image))
+			return;
 		Thread::handleConditions(image);
 		return;
 	}

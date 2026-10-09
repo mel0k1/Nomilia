@@ -71,6 +71,10 @@ enum LinuxSyscall : uint64_t {
 	kLinuxNrGetrandom = 318,
 };
 
+// protocols/posix/supercalls.hpp: superExit. Thor only forwards the number;
+// posix performs the full process death flow when it observes it.
+constexpr uint64_t kPosixSuperExit = 4;
+
 // Per-address-space state for the Linux ABI (program break, clear_child_tid).
 struct LinuxAsState {
 	AddressSpace *space;
@@ -114,7 +118,7 @@ uint32_t mapLinuxProt(uint64_t prot) {
 
 } // anonymous namespace
 
-void linuxHandleSyscall(SyscallImageAccessor image) {
+bool linuxHandleSyscall(SyscallImageAccessor image) {
 #ifdef __x86_64__
 	// Linux x86_64 passes the syscall number in RAX and the arguments in
 	// RDI/RSI/RDX/R10/R8/R9, which are shifted relative to the Hel slots.
@@ -333,11 +337,11 @@ void linuxHandleSyscall(SyscallImageAccessor image) {
 		break;
 	case kLinuxNrExit:
 	case kLinuxNrExitGroup:
-		// Raise the terminate condition; the dispatcher hook then calls
-		// handleConditions() which tears the thread down.
-		thisThread->dispose();
-		ret(0);
-		break;
+		// Hand the exit to posix via the managarm exit supercall so the full
+		// death flow runs (thread killed, parent notified, code propagated).
+		*image.in0() = a0; // posix reads the code from the Hel arg0 slot.
+		Thread::interruptCurrent(static_cast<Interrupt>(kIntrSuperCall + kPosixSuperExit), image, {});
+		return true;
 	case kLinuxNrSetTidAddress: {
 		auto lock = frg::guard(&gLinuxStateMutex);
 		auto *state = getLinuxState(thisThread->getAddressSpace().get());
@@ -534,10 +538,12 @@ void linuxHandleSyscall(SyscallImageAccessor image) {
 		warningLogger() << "linux-abi: unimplemented syscall " << nr << frg::endlog;
 		ret(-kLinuxEnosys);
 	}
+	return false;
 #else
 	// The Linux personality is only implemented on x86_64 so far; the flag
 	// is never set on other architectures (exec.cpp gates kHelAbiLinux).
 	(void)image;
+	return false;
 #endif
 }
 
