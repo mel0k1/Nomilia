@@ -657,6 +657,18 @@ async::result<LinuxSyscallOutcome> handleLinuxSyscall(std::shared_ptr<Process> s
 		ret = co_await statByPath(self, (int)(int64_t)a0, std::move(*pathOpt),
 				(a2 & kLinuxAtSymlinkNofollow) != 0, a2);
 	} break;
+	case kLinuxNrOpenat: {
+		auto pathOpt = co_await memReadString(self->vmContext()->getSpace(),
+				a1, kLinuxPathMax);
+		if(!pathOpt) {
+			ret = -EFAULT;
+			break;
+		}
+		ret = co_await openAtImpl(self, (int)(int64_t)a0, std::move(*pathOpt),
+				(uint32_t)a2, (uint32_t)a3);
+		if(ret < 0)
+			std::cout << "posix: linux openat failed -> " << ret << std::endl;
+	} break;
 	case kLinuxNrLseek:
 		ret = co_await linuxLseek(self.get(), (int)a0, (int64_t)a1, (int)a2);
 		break;
