@@ -666,8 +666,6 @@ async::result<LinuxSyscallOutcome> handleLinuxSyscall(std::shared_ptr<Process> s
 		}
 		ret = co_await openAtImpl(self, (int)(int64_t)a0, std::move(*pathOpt),
 				(uint32_t)a2, (uint32_t)a3);
-		if(ret < 0)
-			std::cout << "posix: linux openat failed -> " << ret << std::endl;
 	} break;
 	case kLinuxNrLseek:
 		ret = co_await linuxLseek(self.get(), (int)a0, (int64_t)a1, (int)a2);
