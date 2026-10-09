@@ -1,4 +1,9 @@
-/* Nomilia: Linux-ABI test for getdents64/ioctl/statx/pipe2/faccessat. */
+/* Nomilia: Linux-ABI test for getdents64/ioctl/statx/pipe2/faccessat.
+ * Exit codes: 46 = success, otherwise the failing step:
+ * 50 openat, 51 getdents64 ret, 52 dirent chain, 53 first d_ino,
+ * 54 close, 55 ioctl console, 56 pipe2, 57 ioctl pipe, 58 write,
+ * 59 read, 60 pipe close, 61 faccessat existing, 62 faccessat missing,
+ * 63 statx call, 64 statx fields. */
 
         .section .note.ABI-tag, "a"
         .p2align 2
@@ -22,7 +27,7 @@ _start:
         xor %r10d, %r10d
         syscall
         cmp $0, %rax
-        jl .Lfail
+        jl .Lf50
         mov %rax, %rbx          /* dirfd */
 
         /* getdents64(fd, buf, 2048) > 0 */
@@ -32,7 +37,7 @@ _start:
         mov $2048, %edx
         syscall
         cmp $0, %rax
-        jle .Lfail
+        jle .Lf51
         mov %rax, %r12          /* packed bytes */
 
         /* walk the dirent64 chain: reclen >= 24, 8-aligned, covers ret */
@@ -43,24 +48,24 @@ _start:
         jge .Lwalkdone
         movzwl 16(%r14,%r13,1), %r15d   /* d_reclen */
         cmp $24, %r15d
-        jl .Lfail
+        jl .Lf52
         test $7, %r15d
-        jnz .Lfail
+        jnz .Lf52
         add %r15, %r13
         cmp %r12, %r13
-        jg .Lfail
+        jg .Lf52
         jmp .Lwalk
 .Lwalkdone:
         /* first entry must carry a nonzero inode */
         cmpq $0, (%r14)
-        je .Lfail
+        je .Lf53
 
         /* close(dirfd) */
         mov $3, %eax
         mov %rbx, %rdi
         syscall
         cmp $0, %rax
-        jl .Lfail
+        jl .Lf54
 
         /* ioctl(1, TIOCGWINSZ, ws): 0 with ws_col==80 on the console, or ENOTTY */
         mov $16, %eax
@@ -71,13 +76,13 @@ _start:
         cmp $0, %rax
         je .Lwsok
         cmp $-25, %rax
-        jne .Lfail
+        jne .Lf55
         jmp .Lwsdone
 .Lwsok:
         lea .Lws(%rip), %rax
         movzwl 2(%rax), %ecx    /* ws_col */
         cmp $80, %ecx
-        jne .Lfail
+        jne .Lf55
 .Lwsdone:
 
         /* pipe2(fds, 0) == 0 */
@@ -86,7 +91,7 @@ _start:
         xor %esi, %esi
         syscall
         cmp $0, %rax
-        jne .Lfail
+        jne .Lf56
 
         /* ioctl(pipe fd, TIOCGWINSZ) == -ENOTTY */
         mov $16, %eax
@@ -95,7 +100,7 @@ _start:
         lea .Lws(%rip), %edx
         syscall
         cmp $-25, %rax
-        jne .Lfail
+        jne .Lf57
 
         /* write(fds[1], "x", 1) == 1 */
         mov $1, %eax
@@ -104,7 +109,7 @@ _start:
         mov $1, %edx
         syscall
         cmp $1, %rax
-        jne .Lfail
+        jne .Lf58
 
         /* read(fds[0], buf, 1) == 1 and buf == 'x' */
         mov $0, %eax
@@ -113,22 +118,22 @@ _start:
         mov $1, %edx
         syscall
         cmp $1, %rax
-        jne .Lfail
+        jne .Lf59
         lea .Lbuf(%rip), %rax
         cmpb $'x', (%rax)
-        jne .Lfail
+        jne .Lf59
 
         /* close both pipe fds */
         mov $3, %eax
         mov .Lpfd(%rip), %edi
         syscall
         cmp $0, %rax
-        jl .Lfail
+        jl .Lf60
         mov $3, %eax
         mov .Lpfd+4(%rip), %edi
         syscall
         cmp $0, %rax
-        jl .Lfail
+        jl .Lf60
 
         /* faccessat(AT_FDCWD, "/tmp", F_OK, 0) == 0 */
         mov $269, %eax
@@ -138,7 +143,7 @@ _start:
         xor %r10d, %r10d
         syscall
         cmp $0, %rax
-        jne .Lfail
+        jne .Lf61
 
         /* faccessat(AT_FDCWD, "/tmp/missing-xyz", F_OK, 0) == -ENOENT */
         mov $269, %eax
@@ -148,7 +153,7 @@ _start:
         xor %r10d, %r10d
         syscall
         cmp $-2, %rax
-        jne .Lfail
+        jne .Lf62
 
         /* statx(AT_FDCWD, "/tmp", 0, 0xFFF, stbuf) == 0 */
         mov $332, %eax
@@ -159,27 +164,70 @@ _start:
         lea .Lstbuf(%rip), %r8
         syscall
         cmp $0, %rax
-        jne .Lfail
+        jne .Lf63
 
         /* stx_ino != 0, stx_mask has STATX_INO, stx_mode is S_IFDIR */
         lea .Lstbuf(%rip), %rax
         cmpq $0, 0x20(%rax)
-        je .Lfail
+        je .Lf64
         testw $0x100, 0(%rax)
-        je .Lfail
+        je .Lf64
         movzwl 0x1c(%rax), %ecx
         and $0xF000, %cx
         cmp $0x4000, %cx
-        jne .Lfail
+        jne .Lf64
 
         /* exit(46) */
         mov $60, %eax
         mov $46, %edi
         syscall
 
-.Lfail:
+.Lf50:
+        mov $50, %edi
+        jmp .Lexit
+.Lf51:
+        mov $51, %edi
+        jmp .Lexit
+.Lf52:
+        mov $52, %edi
+        jmp .Lexit
+.Lf53:
+        mov $53, %edi
+        jmp .Lexit
+.Lf54:
+        mov $54, %edi
+        jmp .Lexit
+.Lf55:
+        mov $55, %edi
+        jmp .Lexit
+.Lf56:
+        mov $56, %edi
+        jmp .Lexit
+.Lf57:
+        mov $57, %edi
+        jmp .Lexit
+.Lf58:
+        mov $58, %edi
+        jmp .Lexit
+.Lf59:
+        mov $59, %edi
+        jmp .Lexit
+.Lf60:
+        mov $60, %edi
+        jmp .Lexit
+.Lf61:
+        mov $61, %edi
+        jmp .Lexit
+.Lf62:
+        mov $62, %edi
+        jmp .Lexit
+.Lf63:
+        mov $63, %edi
+        jmp .Lexit
+.Lf64:
+        mov $64, %edi
+.Lexit:
         mov $60, %eax
-        mov $1, %edi
         syscall
 
         .section .rodata

@@ -133,6 +133,7 @@ DEFINE_TEST(linux_abi_dirstat, ([] {
         pid_t w = waitpid(pid, &status, 0);
         assert(w == pid);
         assert(WIFEXITED(status));
+        printf("posix-tests: linux_abi_dirstat child exit = %d\n", WEXITSTATUS(status));
         assert(WEXITSTATUS(status) == 46);
 
         assert(!unlink(path));
