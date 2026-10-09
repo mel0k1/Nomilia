@@ -81,6 +81,8 @@ struct LinuxAsState {
 constexpr uintptr_t kLinuxBrkBase = 0x10000000;
 constexpr uintptr_t kLinuxBrkLimit = 0x8000000; // 128 MiB of Linux heap.
 
+LinuxAsState *gLinuxStates = nullptr;
+
 frg::ticket_spinlock gLinuxStateMutex;
 
 // TODO: states are not freed when the address space goes away.
@@ -235,7 +237,7 @@ void linuxHandleSyscall(SyscallImageAccessor image) {
 	case kLinuxNrBrk: {
 		LinuxAsState *state;
 		{
-			frg::guard lock(&gLinuxStateMutex);
+			auto lock = frg::guard(&gLinuxStateMutex);
 			state = getLinuxState(thisThread->getAddressSpace().get());
 		}
 		uintptr_t want = a0;
@@ -327,7 +329,7 @@ void linuxHandleSyscall(SyscallImageAccessor image) {
 		ret(0);
 		break;
 	case kLinuxNrSetTidAddress: {
-		frg::guard lock(&gLinuxStateMutex);
+		auto lock = frg::guard(&gLinuxStateMutex);
 		auto *state = getLinuxState(thisThread->getAddressSpace().get());
 		state->clearTid = (void *)a0;
 		ret(1);
