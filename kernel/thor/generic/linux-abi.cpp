@@ -22,11 +22,12 @@
 #include <thor-internal/arch/pic.hpp>
 #endif
 
-namespace thor {
-
 // User-space memory helpers implemented in hel.cpp (external linkage).
 bool readUserMemory(void *kernelPtr, const void *userPtr, size_t size);
 bool writeUserMemory(void *userPtr, const void *kernelPtr, size_t size);
+
+namespace thor {
+
 
 namespace {
 
@@ -75,25 +76,30 @@ struct LinuxAsState {
 	AddressSpace *space;
 	uintptr_t curBrk;
 	void *clearTid;
-	LinuxAsState *next;
 };
 
 constexpr uintptr_t kLinuxBrkBase = 0x10000000;
 constexpr uintptr_t kLinuxBrkLimit = 0x8000000; // 128 MiB of Linux heap.
 
-LinuxAsState *gLinuxStates = nullptr;
-
 frg::ticket_spinlock gLinuxStateMutex;
 
-// TODO: states are not freed when the address space goes away.
-LinuxAsState *getLinuxState(AddressSpace *space) {
-	for(auto s = gLinuxStates; s; s = s->next)
-		if(s->space == space)
-			return s;
-	auto *s = new LinuxAsState{space, kLinuxBrkBase, nullptr, gLinuxStates};
-	gLinuxStates = s;
-	return s;
-}
+	// v1: fixed pool; Linux-personality processes are few.
+	constexpr size_t kMaxLinuxStates = 16;
+	LinuxAsState gLinuxStatePool[kMaxLinuxStates];
+	size_t gLinuxStateCount = 0;
+
+	LinuxAsState *getLinuxState(AddressSpace *space) {
+		for(size_t i = 0; i < gLinuxStateCount; i++)
+			if(gLinuxStatePool[i].space == space)
+				return &gLinuxStatePool[i];
+		if(gLinuxStateCount == kMaxLinuxStates)
+			return nullptr;
+		auto *s = &gLinuxStatePool[gLinuxStateCount++];
+		s->space = space;
+		s->curBrk = kLinuxBrkBase;
+		s->clearTid = nullptr;
+		return s;
+	}
 
 uint32_t mapLinuxProt(uint64_t prot) {
 	uint32_t mapFlags = 0;
@@ -241,6 +247,10 @@ void linuxHandleSyscall(SyscallImageAccessor image) {
 			state = getLinuxState(thisThread->getAddressSpace().get());
 		}
 		uintptr_t want = a0;
+		if(!state) {
+			ret(kLinuxBrkBase);
+			break;
+		}
 		if(!want) {
 			ret(state->curBrk);
 			break;
@@ -299,12 +309,12 @@ void linuxHandleSyscall(SyscallImageAccessor image) {
 			char version[65]; char machine[65]; char domainname[65];
 		};
 		LinuxUtsname buf{};
-		strcpy(buf.sysname, "Linux");
-		strcpy(buf.nodename, "nomilia");
-		strcpy(buf.release, "6.1.0-nomilia");
-		strcpy(buf.version, "#1 SMP Nomilia (Linux ABI)");
-		strcpy(buf.machine, "x86_64");
-		strcpy(buf.domainname, "(none)");
+		memcpy(buf.sysname, "Linux", sizeof("Linux"));
+		memcpy(buf.nodename, "nomilia", sizeof("nomilia"));
+		memcpy(buf.release, "6.1.0-nomilia", sizeof("6.1.0-nomilia"));
+		memcpy(buf.version, "#1 SMP Nomilia (Linux ABI)", sizeof("#1 SMP Nomilia (Linux ABI)"));
+		memcpy(buf.machine, "x86_64", sizeof("x86_64"));
+		memcpy(buf.domainname, "(none)", sizeof("(none)"));
 		if(!writeUserMemory((void *)a0, &buf, sizeof(buf))) {
 			ret(-kLinuxEfault);
 			break;
@@ -331,7 +341,8 @@ void linuxHandleSyscall(SyscallImageAccessor image) {
 	case kLinuxNrSetTidAddress: {
 		auto lock = frg::guard(&gLinuxStateMutex);
 		auto *state = getLinuxState(thisThread->getAddressSpace().get());
-		state->clearTid = (void *)a0;
+		if(state)
+			state->clearTid = (void *)a0;
 		ret(1);
 	} break;
 	case kLinuxNrSetRobustList:
