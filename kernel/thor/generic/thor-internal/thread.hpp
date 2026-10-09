@@ -294,7 +294,8 @@ public:
 	static Error resumeOther(smarter::borrowed_ptr<Thread> thread);
 
 	enum Flags : uint32_t {
-		kFlagServer = 1
+		kFlagServer = 1,
+		kFlagLinuxPersonality = 2
 	};
 
 	Thread(CtorToken, smarter::shared_ptr<Universe> universe,

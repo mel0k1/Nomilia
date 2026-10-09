@@ -2393,7 +2393,6 @@ std::atomic<unsigned int> globalNextCpu = 0;
 
 HelError helCreateThread(HelHandle universe_handle, HelHandle space_handle,
 		int abi, void *ip, void *sp, uint32_t flags, HelHandle *handle) {
-	(void)abi;
 	auto this_thread = getCurrentThread();
 	auto this_universe = this_thread->getUniverse();
 
@@ -2430,6 +2429,9 @@ HelError helCreateThread(HelHandle universe_handle, HelHandle space_handle,
 	if(!threadOutcome)
 		return translateError(threadOutcome.error());
 	auto new_thread = std::move(*threadOutcome);
+	// Nomilia: threads with kHelAbiLinux issue raw Linux syscalls.
+	if(abi == kHelAbiLinux)
+		new_thread->flags |= Thread::kFlagLinuxPersonality;
 
 	// Adding a large prime (coprime to getCpuCount()) should yield a good distribution.
 	auto cpuIndex = globalNextCpu.fetch_add(4099, std::memory_order_relaxed) % getCpuCount();

@@ -47,6 +47,8 @@ struct ImageInfo {
 	size_t phdrEntrySize;
 	size_t phdrCount;
 	std::string interpreter;
+	// Nomilia: set when the image looks like a Linux (musl/glibc) executable.
+	bool isLinux = false;
 };
 
 async::result<frg::expected<Error, ImagePreamble>>
@@ -187,10 +189,43 @@ loadElfImage(SharedFilePtr file, VmContext *vmContext, uintptr_t base) {
 					info.interpreter.data(), phdr->p_filesz));
 			if(size_t n = info.interpreter.find('\0'); n != size_t(-1))
 				info.interpreter.resize(n);
+			// Nomilia: Linux loaders use ld-linux-* / ld-musl-* interpreters.
+			if(!info.interpreter.compare(0, 9, "ld-linux-")
+					|| !info.interpreter.compare(0, 8, "ld-musl-"))
+				info.isLinux = true;
 		}else if(phdr->p_type == PT_DYNAMIC || phdr->p_type == PT_TLS
 				|| phdr->p_type == PT_GNU_EH_FRAME || phdr->p_type == PT_GNU_STACK
-				|| phdr->p_type == PT_GNU_RELRO || phdr->p_type == PT_NOTE) {
+				|| phdr->p_type == PT_GNU_RELRO) {
 			// Ignore this PHDR here.
+		}else if(phdr->p_type == PT_NOTE) {
+			// Nomilia: the GNU ABI-tag note identifies Linux executables
+			// (OS number 0 in the first descriptor word means Linux).
+			size_t noteSize = phdr->p_filesz < 4096 ? phdr->p_filesz : 4096;
+			std::vector<char> noteBuffer;
+			noteBuffer.resize(noteSize);
+			FRG_CO_TRY(co_await file->seek(phdr->p_offset, VfsSeek::absolute));
+			FRG_CO_TRY(co_await file->readExactly(nullptr, noteBuffer.data(), noteBuffer.size()));
+			size_t p = 0;
+			while(p + 12 <= noteBuffer.size()) {
+				auto namesz = *(uint32_t *)(noteBuffer.data() + p);
+				auto descsz = *(uint32_t *)(noteBuffer.data() + p + 4);
+				auto type = *(uint32_t *)(noteBuffer.data() + p + 8);
+				p += 12;
+				size_t nameLen = (namesz + 3) & ~size_t(3);
+				size_t descLen = (descsz + 3) & ~size_t(3);
+				if(p + nameLen + descLen > noteBuffer.size())
+					break;
+				auto name = noteBuffer.data() + p;
+				auto desc = noteBuffer.data() + p + nameLen;
+				if(namesz == 4 && !memcmp(name, "GNU\0", 4) && type == 1 /* NT_VERSION */
+					&& descsz >= 4) {
+				uint32_t os = 1;
+				memcpy(&os, desc, 4);
+				if(!os)
+					info.isLinux = true;
+			}
+				p += nameLen + descLen;
+			}
 		}else{
 			// Ignore unknown PHDRs.
 			std::cout << "posix: Unexpected PHDR type " << phdr->p_type << std::endl;
@@ -292,10 +327,18 @@ execute(ViewPath root, ViewPath workdir,
 		execInfo = FRG_CO_TRY(co_await loadElfImage(execFile, vmContext.get(), 0));
 	}
 
-	// TODO: Should we really look up the dynamic linker in the current working dir?
-	auto ldsoFile = FRG_CO_TRY(co_await open(root, workdir, execInfo.interpreter, self));
-	assert(ldsoFile); // If open() succeeds, it must return a non-null file.
-	auto ldsoInfo = FRG_CO_TRY(co_await loadElfImage(ldsoFile, vmContext.get(), ldsoBaseAddress));
+	ImageInfo ldsoInfo;
+	if(!execInfo.interpreter.empty()) {
+		if(execInfo.isLinux) {
+			std::cout << "posix: Linux dynamic executables are not supported yet" << std::endl;
+			co_return Error::badExecutable;
+		}
+		// TODO: Should we really look up the dynamic linker in the current working dir?
+		auto ldsoFile = FRG_CO_TRY(co_await open(root, workdir, execInfo.interpreter, self));
+		assert(ldsoFile); // If open() succeeds, it must return a non-null file.
+		ldsoInfo = FRG_CO_TRY(co_await loadElfImage(ldsoFile, vmContext.get(), ldsoBaseAddress));
+	}
+	void *entryIp = execInfo.interpreter.empty() ? execInfo.entryIp : ldsoInfo.entryIp;
 
 #ifdef __x86_64__
 	// Маппим vDSO: clock-страница ядра, страница clocktracker и сам vdso.so.
@@ -460,8 +503,14 @@ execute(ViewPath root, ViewPath workdir,
 
 	HelHandle thread;
 	HEL_CHECK(helCreateThread(universe.getHandle(),
-			vmContext->getSpace().getHandle(), kHelAbiSystemV,
-			(void *)ldsoInfo.entryIp, (char *)stackBase + d,
+			vmContext->getSpace().getHandle(),
+#ifdef __x86_64__
+			// Nomilia: Linux-personality threads dispatch through the Linux syscall table.
+			execInfo.isLinux ? kHelAbiLinux : kHelAbiSystemV,
+#else
+			kHelAbiSystemV,
+#endif
+			entryIp, (char *)stackBase + d,
 			kHelThreadStopped, &thread));
 
 	co_return ExecuteResult{

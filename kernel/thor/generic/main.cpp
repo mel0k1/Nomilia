@@ -17,6 +17,7 @@
 #include <thor-internal/kerncfg.hpp>
 #include <thor-internal/kernel-log.hpp>
 #include <thor-internal/kernlet.hpp>
+#include <thor-internal/linux-abi.hpp>
 #include <thor-internal/load-balancing.hpp>
 #include <thor-internal/main.hpp>
 #include <thor-internal/module.hpp>
@@ -572,6 +573,13 @@ void handleSyscall(SyscallImageAccessor image) {
 	if(logEverySyscall && *image.number() != kHelCallLog)
 		infoLogger() << this_thread.get() << " on CPU " << cpuData->cpuIndex
 				<< " syscall #" << *image.number() << frg::endlog;
+
+	// Nomilia: Linux-ABI binaries dispatch through a separate syscall table.
+	if(this_thread->flags & Thread::kFlagLinuxPersonality) {
+		linuxHandleSyscall(image);
+		Thread::handleConditions(image);
+		return;
+	}
 
 	// TODO: The return in this code path prevents us from checking for signals!
 	if(*image.number() >= kHelCallSuper) {

@@ -63,6 +63,7 @@ src = files(
 	'generic/kernel-mutexes.cpp',
 	'generic/kernel-ostrace.cpp',
 	'generic/kernel-stack.cpp',
+	'generic/linux-abi.cpp',
 	'generic/load-balancing.cpp',
 	'generic/main.cpp',
 	'generic/mbus.cpp',

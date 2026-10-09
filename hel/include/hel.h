@@ -399,7 +399,8 @@ enum {
 };
 
 enum {
-	kHelAbiSystemV = 1
+	kHelAbiSystemV = 1,
+	kHelAbiLinux = 2
 };
 
 enum {

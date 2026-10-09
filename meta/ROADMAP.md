@@ -32,11 +32,12 @@
 - [x] Ядро: переочередь фьютексов `helFutexRequeue` (Hel ABI №72: wake N + перенос M в другой слот; cmp-проверка как в `FUTEX_CMP_REQUEUE`); PI-варианты пока не нужны (kernel-test `futexRequeueSanity` проходит в QEMU; sysdep-хук `FutexRequeue` заведён в mlibc-форке)
 - [x] procfs: `cpuinfo` (cpuid+kerncfg), `meminfo` (kerncfg), `loadavg`, `version`, `/proc/[pid]/environ`, `/proc/[pid]/cmdline`; `status`/`maps` уже есть upstream; глобальный `/proc/cmdline` тоже уже есть upstream
 - [~] mlibc: форк [mel0k1/mlibc](https://github.com/mel0k1/mlibc) (ветка `nomilia`, база — пиннутый `880b1ce7`); сделано: `AT_CLKTCK` в `abis/managarm/auxv.h`, sysdep-хук `FutexRequeue` (wiring на `helFutexRequeue`), Linux-совместимый `uname`; CI собирает mlibc из форка
-- [ ] mlibc: слой `linux-sysdeps` — таблица «Linux nr → bragi» для статической musl-персональности
-- [ ] uname: Linux-совместимое `utsname` (имя ядра, версия в формате Linux)
+- [~] linux-sysdeps v1 (ядро): personality-флаг процесса (`kHelAbiLinux` в `helCreateThread`) + диспетчер Linux-сисколлов в thor (`linux-abi.cpp`): write→klog, brk/mmap/mprotect/munmap, uname, futex WAIT/WAKE/REQUEUE, clock_gettime/gettimeofday/time, getrandom, arch_prctl, exit_group; детект Linux-ELF в exec.cpp (PT_INTERP `ld-linux*`/`ld-musl*`, GNU ABI-tag)
+- [x] тест `linux_abi_static_hello`: fork + execve немодифицированного статического Linux-ELF (raw syscalls, без libc) → exit 42
+- [x] uname: Linux-совместимое `utsname` (имя ядра, версия в формате Linux)
 - [ ] Тест-матрица: busybox (sh, ls, ps, top), статические утилиты
 
-**DoD**: `qemu: nomilia /bin/busybox sh` — интерактивная сессия без падений.
+**DoD**: `qemu: nomilia /bin/busybox sh` — интерактивная сессия без падений. (v1 выполнен: execve Linux-ELF работает; clone/fork внутри Linux-персональности и файловые сисколлы — фаза 2)
 
 ## Этап 3 — Linux ABI v2: динамические программы
 
