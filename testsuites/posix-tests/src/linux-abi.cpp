@@ -219,3 +219,55 @@ DEFINE_TEST(linux_abi_dyn, ([] {
         assert(!unlink(ldPath));
         assert(!unlink(path));
 }));
+
+// Nomilia: real Linux payloads (built by ci/payloads/build-musl-busybox.sh and
+// delivered into the image) must run through the linux-abi layer: static
+// busybox directly, dynamic binaries through the ld-musl PT_INTERP path.
+DEFINE_TEST(linux_abi_payloads, ([] {
+        auto spawn = [](const char *path, char *argv[]) -> int {
+                pid_t pid = fork();
+                assert(pid >= 0);
+                if(!pid) {
+                        char *envp[] = { nullptr };
+                        execve(path, argv, envp);
+                        _exit(127); // execve() failed.
+                }
+
+                int status = 0;
+                pid_t w = waitpid(pid, &status, 0);
+                assert(w == pid);
+                if(!WIFEXITED(status)) {
+                        printf("posix-tests: linux_abi_payloads: %s killed by signal %d\n",
+                                        path, WTERMSIG(status));
+                        return -1;
+                }
+                return WEXITSTATUS(status);
+        };
+
+        {
+                char argv0[] = "busybox";
+                char argv1[] = "sh";
+                char argv2[] = "-c";
+                char argv3[] = "echo nomilia-busybox-static";
+                char *argv[] = { argv0, argv1, argv2, argv3, nullptr };
+                int r = spawn("/usr/bin/busybox", argv);
+                printf("posix-tests: linux_abi_payloads: static busybox exit = %d\n", r);
+                assert(r == 0);
+        }
+        {
+                char argv0[] = "hello-dynamic";
+                char *argv[] = { argv0, nullptr };
+                int r = spawn("/usr/bin/hello-dynamic", argv);
+                printf("posix-tests: linux_abi_payloads: hello-dynamic exit = %d\n", r);
+                assert(r == 0);
+        }
+        {
+                char argv0[] = "busybox-dynamic";
+                char argv1[] = "echo";
+                char argv2[] = "nomilia-busybox-dynamic";
+                char *argv[] = { argv0, argv1, argv2, nullptr };
+                int r = spawn("/usr/bin/busybox-dynamic", argv);
+                printf("posix-tests: linux_abi_payloads: busybox-dynamic exit = %d\n", r);
+                assert(r == 0);
+        }
+}));

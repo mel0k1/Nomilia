@@ -261,6 +261,10 @@ jobs:
                 fetch-depth: 0
           - name: Alias mlibc origin/master (xbstrap rolling version)
             run: git -C src/mlibc update-ref refs/remotes/origin/master "$(git -C src/mlibc rev-parse HEAD)"
+          - name: Build Linux payloads
+            run: |
+                set -x
+                ci/payloads/build-musl-busybox.sh
           - name: Assemble the image
             run: |
                 set -x
@@ -273,6 +277,14 @@ jobs:
                 xbstrap install --only-wanted --deps-of managarm-system-rs
                 xbstrap install --only-wanted --deps-of weston-desktop
                 xbstrap install os-test
+                # Nomilia: deliver linux-compat payloads into the image sysroot
+                # (/lib is a symlink to usr/lib, so ld-musl lands at its PT_INTERP path).
+                mkdir -p sysroot/usr/bin sysroot/usr/lib
+                cp ../payload/sysroot/bin/busybox ../payload/sysroot/bin/busybox-dynamic \
+                        ../payload/sysroot/bin/hello-dynamic ../payload/sysroot/bin/hello-static \
+                        sysroot/usr/bin/
+                cp ../payload/sysroot/lib/ld-musl-x86_64.so.1 sysroot/usr/lib/
+                ln -sf ld-musl-x86_64.so.1 sysroot/usr/lib/libc.musl-x86_64.so.1
                 xbstrap run initialize-empty-image remake-image
             env:
                 XBPS_ARCH: x86_64
