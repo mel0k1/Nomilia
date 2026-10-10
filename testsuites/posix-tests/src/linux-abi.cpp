@@ -174,3 +174,48 @@ DEFINE_TEST(linux_abi_socksig, ([] {
         assert(!unlink(path));
 }));
 
+extern "C" const unsigned char nomilia_linux_nomilia_ld_blob[];
+extern "C" const unsigned long nomilia_linux_nomilia_ld_size;
+
+extern "C" const unsigned char nomilia_linux_dynhello_blob[];
+extern "C" const unsigned long nomilia_linux_dynhello_size;
+
+// Nomilia: a dynamic Linux ELF (PT_INTERP) is loaded together with its
+// interpreter; the nomilia-ld.so test loader jumps to AT_ENTRY.
+DEFINE_TEST(linux_abi_dyn, ([] {
+        const char *ldPath = "/tmp/nomilia-ld.so";
+        const char *path = "/tmp/nomilia-dynhello";
+
+        int fd = open(ldPath, O_WRONLY | O_CREAT | O_TRUNC, 0777);
+        assert(fd >= 0);
+        ssize_t n = write(fd, nomilia_linux_nomilia_ld_blob, nomilia_linux_nomilia_ld_size);
+        assert(n == (ssize_t)nomilia_linux_nomilia_ld_size);
+        assert(!close(fd));
+        assert(!chmod(ldPath, 0755));
+
+        fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0777);
+        assert(fd >= 0);
+        n = write(fd, nomilia_linux_dynhello_blob, nomilia_linux_dynhello_size);
+        assert(n == (ssize_t)nomilia_linux_dynhello_size);
+        assert(!close(fd));
+        assert(!chmod(path, 0755));
+
+        pid_t pid = fork();
+        assert(pid >= 0);
+        if(!pid) {
+                char *argv[] = { const_cast<char *>(path), nullptr };
+                char *envp[] = { nullptr };
+                execve(path, argv, envp);
+                _exit(127); // execve() failed.
+        }
+
+        int status = 0;
+        pid_t w = waitpid(pid, &status, 0);
+        assert(w == pid);
+        assert(WIFEXITED(status));
+        printf("posix-tests: linux_abi_dyn child exit = %d\n", WEXITSTATUS(status));
+        assert(WEXITSTATUS(status) == 48);
+
+        assert(!unlink(ldPath));
+        assert(!unlink(path));
+}));

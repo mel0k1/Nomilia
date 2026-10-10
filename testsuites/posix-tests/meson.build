@@ -77,6 +77,22 @@ if host_machine.cpu_family() == 'x86_64'
 	socksig_blob = custom_target('linux-socksig-blob.c',
 				input : socksig_elf, output : 'linux-socksig-blob.c',
 				command : [py, files('gen-hello-blob.py'), '@INPUT@', '@OUTPUT@'])
-	src += [hello_blob, files_blob, forky_blob, dirstat_blob, socksig_blob]
+	nld_elf = custom_target('nomilia-linux-nomilia-ld.elf',
+				input : 'linux-hello/nomilia-ld.S', output : 'nomilia-linux-nomilia-ld.elf',
+				command : [meson.get_compiler('c').cmd_array(), '-nostdlib', '-static', '-no-pie',
+					'-Wl,-e,_start', '-Wl,-Ttext=0x10000', '-Wl,--build-id=none',
+					'-o', '@OUTPUT@', '@INPUT@'])
+	nld_blob = custom_target('linux-nld-blob.c',
+				input : nld_elf, output : 'linux-nld-blob.c',
+				command : [py, files('gen-hello-blob.py'), '@INPUT@', '@OUTPUT@'])
+	dyn_elf = custom_target('nomilia-linux-dynhello.elf',
+				input : 'linux-hello/dynhello.S', output : 'nomilia-linux-dynhello.elf',
+				command : [meson.get_compiler('c').cmd_array(), '-nostdlib', '-static', '-no-pie',
+					'-Wl,-e,_start', '-Wl,-Ttext=0x400000', '-Wl,--build-id=none',
+					'-o', '@OUTPUT@', '@INPUT@'])
+	dyn_blob = custom_target('linux-dyn-blob.c',
+				input : dyn_elf, output : 'linux-dyn-blob.c',
+				command : [py, files('gen-hello-blob.py'), '@INPUT@', '@OUTPUT@'])
+	src += [hello_blob, files_blob, forky_blob, dirstat_blob, socksig_blob, nld_blob, dyn_blob]
 endif
 executable('posix-tests', src, dependencies: [cli11_dep, frigg], install : true)

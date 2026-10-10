@@ -329,13 +329,11 @@ execute(ViewPath root, ViewPath workdir,
 
 	ImageInfo ldsoInfo;
 	if(!execInfo.interpreter.empty()) {
-		if(execInfo.isLinux) {
-			std::cout << "posix: Linux dynamic executables are not supported yet" << std::endl;
-			co_return Error::badExecutable;
-		}
 		// TODO: Should we really look up the dynamic linker in the current working dir?
 		auto ldsoFile = FRG_CO_TRY(co_await open(root, workdir, execInfo.interpreter, self));
 		assert(ldsoFile); // If open() succeeds, it must return a non-null file.
+		// Nomilia: this also loads Linux interpreters (ld-linux/ld-musl and the
+		// nomilia-ld.so test loader); the auxv already carries AT_BASE/AT_PHDR.
 		ldsoInfo = FRG_CO_TRY(co_await loadElfImage(ldsoFile, vmContext.get(), ldsoBaseAddress));
 	}
 	void *entryIp = execInfo.interpreter.empty() ? execInfo.entryIp : ldsoInfo.entryIp;
