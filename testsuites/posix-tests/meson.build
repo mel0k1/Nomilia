@@ -101,6 +101,6 @@ probe_blob = custom_target('linux-probe-blob.c',
 	dyn_blob = custom_target('linux-dyn-blob.c',
 				input : dyn_elf, output : 'linux-dyn-blob.c',
 				command : [py, files('gen-hello-blob.py'), '@INPUT@', '@OUTPUT@'])
-	src += [hello_blob, files_blob, forky_blob, dirstat_blob, socksig_blob, nld_blob, dyn_blob]
+	src += [hello_blob, files_blob, forky_blob, dirstat_blob, socksig_blob, nld_blob, dyn_blob, probe_blob]
 endif
 executable('posix-tests', src, dependencies: [cli11_dep, frigg], install : true)
