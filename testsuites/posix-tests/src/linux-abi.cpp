@@ -261,12 +261,27 @@ DEFINE_TEST(linux_abi_payloads, ([] {
 
         int rStaticBusybox = -2, rHelloStatic = -2, rHelloDyn = -2, rBusyboxDyn = -2;
         {
+                printf("posix-tests: linux_abi_payloads: spawning static busybox\n");
+                fflush(stdout);
                 char a0[] = "busybox";
                 char a1[] = "sh";
                 char a2[] = "-c";
                 char a3[] = "echo nomilia-busybox-static";
                 char *argv[] = { a0, a1, a2, a3, nullptr };
-                rStaticBusybox = spawn("/usr/bin/busybox", argv);
+                pid_t pid = fork();
+                assert(pid >= 0);
+                if(!pid) {
+                        printf("posix-tests: child: execve /usr/bin/busybox\n");
+                        fflush(stdout);
+                        char *envp[] = { nullptr };
+                        execve("/usr/bin/busybox", argv, envp);
+                        fprintf(stderr, "posix-tests: execve failed: %s\n", strerror(errno));
+                        _exit(127);
+                }
+                int status = 0;
+                assert(waitpid(pid, &status, 0) == pid);
+                printf("posix-tests: linux_abi_payloads: busybox status raw = %d\n", status);
+                rStaticBusybox = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
         }
         {
                 char a0[] = "hello-static";

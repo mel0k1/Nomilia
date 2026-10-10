@@ -1745,8 +1745,17 @@ Process::clone(std::shared_ptr<Process> original, void *ip, void *sp, posix::sup
 
 async::result<Error> Process::exec(std::shared_ptr<Process> process,
 		std::string path, std::vector<std::string> args, std::vector<std::string> env) {
+	{
+		auto f = process->fileContext()->getFile(1);
+		if(f) {
+			const char *m = "xt:proc-exec ";
+			co_await f->writeAll(process.get(), m, strlen(m));
+		}
+	}
 	auto exec_hierarchy = extendHierarchyForProcess(process->pid(), path);
+	co_await execTrace(process.get(), "xt:hierarchy-ok");
 	auto exec_vm_context = VmContext::create(std::move(exec_hierarchy));
+	co_await execTrace(process.get(), "xt:vmctx-ok");
 
 	// Perform the exec() in a new VM context so that we
 	// can catch errors before trashing the calling process.

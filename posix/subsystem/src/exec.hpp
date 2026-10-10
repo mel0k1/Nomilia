@@ -17,6 +17,9 @@ struct ExecuteResult {
 	std::vector<std::string> env;
 };
 
+// Nomilia: temporary exec-path diagnostics (see exec.cpp).
+async::result<void> execTrace(Process *self, const char *what);
+
 async::result<frg::expected<Error, ExecuteResult>>
 execute(ViewPath root, ViewPath workdir,
 		std::string path,
