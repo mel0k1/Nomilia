@@ -149,6 +149,42 @@ _start:
         mov $1, %edx
         syscall
 
+        /* read back the handler table: sigaction(10, NULL, old2, 8) */
+        mov $13, %eax
+        mov $10, %edi
+        xor %esi, %esi
+        lea .Lold2(%rip), %rdx
+        mov $8, %r10
+        syscall
+        test %rax, %rax
+        jnz .Lf76
+        lea .Lold2(%rip), %rax
+        cmp .Lhandler, %rax
+        je .Lgok
+        mov $'g', %r14b
+        jmp .Lmarkout
+.Lgok:
+        mov $'G', %r14b
+
+.Lmarkout:
+        /* progress marker in r14b */
+        mov $1, %eax
+        mov $1, %edi
+        mov %r14b, .Lmark
+        lea .Lmark(%rip), %rsi
+        mov $1, %edx
+        syscall
+
+        /* read back the mask: sigprocmask(SIG_SETMASK, NULL, old3, 8) */
+        mov $14, %eax
+        mov $2, %edi
+        xor %esi, %esi
+        lea .Lold3(%rip), %rdx
+        mov $8, %r10
+        syscall
+        test %rax, %rax
+        jnz .Lf77
+
         /* bounded wait for the handler */
         mov $500000, %r13
 .Lwait:
@@ -205,6 +241,12 @@ _start:
         jmp .Lexit
 .Lf75:
         mov $75, %edi
+        jmp .Lexit
+.Lf76:
+        mov $76, %edi
+        jmp .Lexit
+.Lf77:
+        mov $77, %edi
 .Lexit:
         mov $60, %eax           /* exit_group */
         syscall
@@ -248,5 +290,7 @@ _start:
 .Laddrlen: .long 16
 .Lempty: .quad 0
 .Lold:  .quad 0
+.Lold2: .space 32
+.Lold3: .quad 0
 .Lflag: .quad 0
 .Lmark: .byte 0

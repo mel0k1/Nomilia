@@ -1028,6 +1028,14 @@ async::result<int64_t> linuxFAccessat(std::shared_ptr<Process> self, int dirfd,
 	co_return 0;
 }
 
+// Nomilia: temporary CI diagnostics - writes one byte to the child's stdout.
+async::result<void> linuxDiagMark(Process *self, char c) {
+	auto file = self->fileContext()->getFile(1);
+	if(!file)
+		co_return;
+	co_await file->writeAll(self, &c, 1);
+}
+
 // ------------------------------------------------------------------
 // v4: sockets and signals.
 
@@ -1626,6 +1634,7 @@ async::result<int64_t> linuxKill(Process *self, int64_t pid, int64_t sig) {
 			co_return -ESRCH;
 		if(sig)
 			tg->issueThreadGroupSignal(sig, info);
+		co_await linuxDiagMark(self, 'K');
 	}else if(pid == 0) {
 		auto pg = self->pgPointer();
 		if(!pg)
@@ -1673,6 +1682,7 @@ async::result<void> raiseLinuxContext(SignalItem *item, Process *process,
 		SignalContext::SignalHandling handling) {
 #if defined(__x86_64__)
 	auto thread = process->threadDescriptor();
+	co_await linuxDiagMark(process, 'r');
 	uintptr_t sigregs[19];
 	HEL_CHECK(helLoadRegisters(thread.getHandle(), kHelRegsSignal, &sigregs));
 
@@ -1721,6 +1731,7 @@ async::result<void> raiseLinuxContext(SignalItem *item, Process *process,
 	sigregs[15] = frame;
 	sigregs[16] = handling.handler.handlerIp;
 	HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsSignal, &sigregs));
+	co_await linuxDiagMark(process, 'R');
 #else
 	(void)item;
 	(void)process;

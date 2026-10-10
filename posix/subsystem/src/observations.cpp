@@ -724,8 +724,12 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 				// Signals raised during the upcall (kill to self, SIGPIPE) are
 				// processed here: serveSignals cannot interrupt a thread that is
 				// parked for resume.
+				if(nr == 62 || nr == 234)
+					co_await linuxDiagMark(self.get(), 'p');
 				if(!co_await handlePendingSignalsFromObservation(self.get()))
 					break;
+				if(nr == 62 || nr == 234)
+					co_await linuxDiagMark(self.get(), 'P');
 				HEL_CHECK(helResume(thread.getHandle()));
 			}else if(outcome.committed) {
 				// rt_sigreturn already restored the full register image.
