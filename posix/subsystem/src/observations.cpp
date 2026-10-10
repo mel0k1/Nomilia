@@ -81,7 +81,7 @@ async::result<bool> handlePendingSignalsFromObservation(Process *self) {
 		}
 
 		if(self->isLinuxPersonality())
-			co_await linuxDiagMark(self, 'c');
+			co_await linuxDiagMark(self, '0' + std::min(self->accessThreadPage()->globalSignalFlag, 9u));
 		if (self->checkOrRequestSignalRaise()) {
 			if constexpr (logSignals)
 				std::println("posix: raising signal");

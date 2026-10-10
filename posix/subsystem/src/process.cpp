@@ -1837,6 +1837,9 @@ async::result<Error> Process::exec(std::shared_ptr<Process> process,
 	process->threadGroup()->environment() = std::move(execResult.env);
 	process->threadGroup()->didExecute_ = true;
 	process->setLinuxPersonality(execResult.isLinux);
+	// Nomilia: a fresh exec starts with no SignalGuard; a stale flag from
+	// the pre-exec native client would park every signal forever.
+	accessThreadPage()->globalSignalFlag = 0;
 	HEL_CHECK(helGetCredentials(process->_threadDescriptor.getHandle(), 0, process->credentials_.data()));
 
 	auto generation = std::make_shared<Generation>();
