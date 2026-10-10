@@ -76,8 +76,20 @@ parseElfPreamble(SharedFilePtr file) {
 	co_return preamble;
 }
 
+// Nomilia: exec-path trace markers, written to the exec'ing process's
+// stdout so they reach the CI console even when the system dies mid-exec.
+async::result<void> execTrace(Process *self, const char *what) {
+	if(!self)
+		co_return;
+	auto file = self->fileContext()->getFile(1);
+	if(!file)
+		co_return;
+	co_await file->writeAll(self, what, strlen(what));
+	co_await file->writeAll(self, " ", 1);
+}
+
 async::result<frg::expected<Error, ImageInfo>>
-loadElfImage(SharedFilePtr file, VmContext *vmContext, uintptr_t base) {
+loadElfImage(SharedFilePtr file, VmContext *vmContext, uintptr_t base, Process *self = nullptr) {
 	assert(!(base & (kPageSize - 1))); // Callers need to ensure this.
 	ImageInfo info;
 
@@ -116,6 +128,12 @@ loadElfImage(SharedFilePtr file, VmContext *vmContext, uintptr_t base) {
 		if(phdr->p_type == PT_LOAD) {
 			if(!phdr->p_memsz) // Skip empty segments.
 				continue;
+			if(self) {
+				co_await execTrace(self, "xt:seg");
+				char idx = '0' + i;
+				co_await execTrace(self, &idx);
+				co_await execTrace(self, " ");
+			}
 
 			bool properlyAligned = phdr->p_offset % phdr->p_align == phdr->p_vaddr % phdr->p_align;
 
@@ -327,14 +345,17 @@ execute(ViewPath root, ViewPath workdir,
 		nRecursions++;
 	}
 
+	co_await execTrace(self, "xt:open-ok");
 	auto execPreamble = FRG_CO_TRY(co_await parseElfPreamble(execFile));
+	co_await execTrace(self, "xt:preamble-ok");
 	ImageInfo execInfo;
 	if(execPreamble.isPie) {
 		// Unconditionally apply a non-zero base address to PIE objects.
-		execInfo = FRG_CO_TRY(co_await loadElfImage(execFile, vmContext.get(), 0x200000));
+		execInfo = FRG_CO_TRY(co_await loadElfImage(execFile, vmContext.get(), 0x200000, self));
 	}else{
-		execInfo = FRG_CO_TRY(co_await loadElfImage(execFile, vmContext.get(), 0));
+		execInfo = FRG_CO_TRY(co_await loadElfImage(execFile, vmContext.get(), 0, self));
 	}
+	co_await execTrace(self, "xt:exec-img-ok");
 
 	ImageInfo ldsoInfo;
 	if(!execInfo.interpreter.empty()) {
@@ -343,7 +364,8 @@ execute(ViewPath root, ViewPath workdir,
 		assert(ldsoFile); // If open() succeeds, it must return a non-null file.
 		// Nomilia: this also loads Linux interpreters (ld-linux/ld-musl and the
 		// nomilia-ld.so test loader); the auxv already carries AT_BASE/AT_PHDR.
-		ldsoInfo = FRG_CO_TRY(co_await loadElfImage(ldsoFile, vmContext.get(), ldsoBaseAddress));
+		ldsoInfo = FRG_CO_TRY(co_await loadElfImage(ldsoFile, vmContext.get(), ldsoBaseAddress, self));
+		co_await execTrace(self, "xt:ldso-ok");
 	}
 	void *entryIp = execInfo.interpreter.empty() ? execInfo.entryIp : ldsoInfo.entryIp;
 
@@ -376,6 +398,7 @@ execute(ViewPath root, ViewPath workdir,
 			helix::UniqueDescriptor{vdsoHandle}, nullptr,
 			0, vdsoSize, false,
 			kHelMapProtRead | kHelMapProtExecute | kHelMapFixedNoReplace));
+	co_await execTrace(self, "xt:vdso-ok");
 #endif
 
 	auto link = execFile->associatedLink();
@@ -519,6 +542,7 @@ execute(ViewPath root, ViewPath workdir,
 #endif
 			entryIp, (char *)stackBase + d,
 			kHelThreadStopped, &thread));
+		co_await execTrace(self, "xt:thread-ok");
 
 	co_return ExecuteResult{
 		.thread = helix::UniqueDescriptor{thread},
