@@ -370,11 +370,6 @@ struct SignalItem {
 	frg::default_list_hook<SignalItem> hook_;
 };
 
-// Nomilia: signal delivery for Linux-personality threads. Builds an
-// rt_sigframe instead of the managarm SignalFrame; the SA_RESTORER
-// trampoline re-enters the kernel via the rt_sigreturn syscall.
-async::result<void> raiseLinuxContext(SignalItem *item, Process *process,
-		SignalContext::SignalHandling handling);
 
 using PollSignalResult = std::tuple<uint64_t, uint64_t>;
 using CheckSignalResult = std::tuple<uint64_t, uint64_t>;
@@ -462,6 +457,11 @@ struct SignalContext {
 private:
 	SignalHandler _handlers[64];
 };
+// Nomilia: signal delivery for Linux-personality threads. Builds an
+// rt_sigframe instead of the managarm SignalFrame; the SA_RESTORER
+// trampoline re-enters the kernel via the rt_sigreturn syscall.
+async::result<void> raiseLinuxContext(SignalItem *item, Process *process,
+		SignalContext::SignalHandling handling);
 
 template <>
 struct std::formatter<SignalContext::SignalHandling> : std::formatter<string_view> {
