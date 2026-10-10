@@ -50,9 +50,10 @@
 - [x] vDSO: freestanding DSO (`posix/subsystem/vdso/`) с `__vdso_clock_gettime`/`clock_getres`/`gettimeofday`/`time`/`getcpu` (версионируемые символы `LINUX_2.6`, оба hash-стиля); блоб встраивается в posix-subsystem; `execute()` маппит фиксированный регион `[clock-страница ядра][страница clocktracker][vdso.so]` и публикует `AT_SYSINFO_EHDR`; данные — уже существующие `HelClockPage` (TSC+seqlock) и tracker-страница; приёмочный тест `vdso_*` в posix-tests (QEMU)
 - [x] Загрузка `PT_INTERP`-интерпретаторов для Linux-бинарников в `exec.cpp` (тот же shared loader base, Linux-совместимый auxv `AT_BASE`/`AT_PHDR`/`AT_ENTRY`/`AT_EXECFN`); тест `linux_abi_dyn` (минимальный `nomilia-ld.so` + PT_INTERP/PT_DYNAMIC-hello, exit 48)
 - [x] CI-payloads: workflow `payloads.yml` собирает musl из исходников + busybox (static и dynamic) + `hello-dynamic`, smoke-тесты на хосте, артефакт `linux-payloads-x86_64` (`ci/payloads/build-musl-busybox.sh`)
-- [ ] Доставка payloads в QEMU-образ Nomilia и запуск `hello-dynamic`/`busybox-dynamic` через `ld-musl` (PT_INTERP `/lib/ld-musl-x86_64.so.1`) в CI
+- [x] Доставка payloads в QEMU-образ Nomilia: сборка в job `test-image` + инжекция в `build/system-root` до `remake-image` (`/usr/bin` + `/lib/ld-musl-x86_64.so.1`); тест `linux_abi_payloads` в posix-tests подтверждает наличие всех файлов в образе
+- [~] Запуск `hello-dynamic`/`busybox-dynamic` (и статического busybox) в госте: система мгновенно погибает на execve `/usr/bin/busybox` — до первых exec-маркеров posix (`xt:proc-exec`) не доходит; отладка по xt-маркерам (exec.cpp), следующий кандидат — переход на гостевой e2e через ci-boot (`ci/payloads/guest-test.sh`)
+- [x] Поверхность сисколлов для настоящего `ld-musl`: writev/readv (Linux nr 19/20, bounce-буфер 4 МиБ; musl stdio флашит через writev)
 - [ ] mlibc: vDSO wiring — `sys_clock_get`/`gettimeofday` через `AT_SYSINFO_EHDR` (сейчас vDSO потребляют Linux-бинарники; mlibc ходит syscall'ом)
-- [ ] Поверхность сисколлов для настоящего `ld-musl`: writev/readv и остальное, что линкер тянет до точки входа
 - [ ] Обработка `PT_TLS` и arch_prctl-эквиваленты → динамический `ld-linux`/glibc
 - [ ] Linux socket ABI: трансляция sockopt/sockaddr в `requests/socket.cpp` и netserver; протокол IPv6
 - [ ] inotify: свести поведение с Linux-семантикой (masked-события, IN_EXCL_UNLINK и пр.)

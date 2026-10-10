@@ -97,12 +97,17 @@ stage_busybox_dynamic() { build_busybox busybox-dynamic dynamic busybox-dynamic;
 
 stage_hello() {
     stage_start hello
+    # exit 0 только если сообщение реально ушло в stdout: ловит сломанный
+    # writev/stdio на целевой ОС (musl флашит stdio через writev).
     cat > "$SRC_DIR/hello.c" <<'EOF'
 #include <stdio.h>
 #include <unistd.h>
 
 int main(void) {
-    printf("hello from a musl dynamic binary (pid %ld)\n", (long)getpid());
+    if(printf("hello from a musl dynamic binary (pid %ld)\n", (long)getpid()) < 0)
+        return 1;
+    if(fflush(stdout) || ferror(stdout))
+        return 1;
     return 0;
 }
 EOF
