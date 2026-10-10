@@ -1028,14 +1028,6 @@ async::result<int64_t> linuxFAccessat(std::shared_ptr<Process> self, int dirfd,
 	co_return 0;
 }
 
-// Nomilia: temporary CI diagnostics - writes one byte to the child's stdout.
-async::result<void> linuxDiagMark(Process *self, char c) {
-	auto file = self->fileContext()->getFile(1);
-	if(!file)
-		co_return;
-	co_await file->writeAll(self, &c, 1);
-}
-
 // ------------------------------------------------------------------
 // v4: sockets and signals.
 
@@ -1673,6 +1665,14 @@ async::result<int64_t> linuxTgkill(Process *self, int64_t tgid, int64_t tid,
 }
 
 } // anonymous namespace
+
+// Nomilia: temporary CI diagnostics - writes one byte to the child's stdout.
+async::result<void> linuxDiagMark(Process *self, char c) {
+	auto file = self->fileContext()->getFile(1);
+	if(!file)
+		co_return;
+	co_await file->writeAll(self, &c, 1);
+}
 
 // Signal delivery for Linux-personality threads: save the register image and
 // the kernel SIMD blob into an rt_sigframe on the user stack, then enter the
