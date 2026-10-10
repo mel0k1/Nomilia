@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 #include <sys/auxv.h>
 #include <iostream>
 
@@ -85,7 +86,9 @@ async::result<void> execTrace(Process *self, const char *what) {
 	if(!file)
 		co_return;
 	co_await file->writeAll(self, what, strlen(what));
-	co_await file->writeAll(self, " ", 1);
+	// newline per marker: ci-boot flushes only complete lines, a
+	// space-separated trace would be lost if the system dies mid-exec.
+	co_await file->writeAll(self, "\n", 1);
 }
 
 async::result<frg::expected<Error, ImageInfo>>
@@ -129,10 +132,9 @@ loadElfImage(SharedFilePtr file, VmContext *vmContext, uintptr_t base, Process *
 			if(!phdr->p_memsz) // Skip empty segments.
 				continue;
 			if(self) {
-				co_await execTrace(self, "xt:seg");
-				char idx = '0' + i;
-				co_await execTrace(self, &idx);
-				co_await execTrace(self, " ");
+				char segBuf[16];
+				snprintf(segBuf, sizeof(segBuf), "xt:seg %d", i);
+				co_await execTrace(self, segBuf);
 			}
 
 			bool properlyAligned = phdr->p_offset % phdr->p_align == phdr->p_vaddr % phdr->p_align;
