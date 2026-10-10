@@ -67,8 +67,11 @@ async::result<bool> handlePendingSignalsFromObservation(Process *self) {
 
 		if (!active)
 			co_return true;
+		co_await linuxDiagMark(self, 'F');
 
 		auto handling = self->threadGroup()->signalContext()->acceptSignal(active, self);
+		if (handling.ignored)
+			co_await linuxDiagMark(self, 'I');
 		if constexpr (logSignals)
 			std::println("posix: signal={} handling={}", active->signalNumber, handling);
 
@@ -77,6 +80,8 @@ async::result<bool> handlePendingSignalsFromObservation(Process *self) {
 			continue;
 		}
 
+		if(self->isLinuxPersonality())
+			co_await linuxDiagMark(self, 'c');
 		if (self->checkOrRequestSignalRaise()) {
 			if constexpr (logSignals)
 				std::println("posix: raising signal");
@@ -92,6 +97,8 @@ async::result<bool> handlePendingSignalsFromObservation(Process *self) {
 			// checkOrRequestSignalRaise() has set globalSignalFlag to 2.
 			// The alert wakes a wait that already passed its globalSignalFlag check.
 			alertRemoteQueue(self);
+			if(self->isLinuxPersonality())
+				co_await linuxDiagMark(self, 'n');
 			self->delayedSignal = active;
 			self->delayedSignalHandling = handling;
 			co_return true;

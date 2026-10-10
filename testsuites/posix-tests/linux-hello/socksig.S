@@ -158,8 +158,9 @@ _start:
         syscall
         test %rax, %rax
         jnz .Lf76
-        lea .Lold2(%rip), %rax
-        cmp .Lhandler, %rax
+        mov .Lold2(%rip), %rax
+        lea .Lhandler(%rip), %rcx
+        cmp %rcx, %rax
         je .Lgok
         mov $'g', %r14b
         jmp .Lmarkout

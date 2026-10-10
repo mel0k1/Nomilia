@@ -1565,6 +1565,7 @@ async::result<int64_t> linuxRtSigaction(Process *self, int signo,
 			co_return -EFAULT;
 		auto handler = linuxHandlerFromUser(raw[0], raw[1], raw[2], raw[3]);
 		auto old = ctx->changeHandler(signo, handler);
+		co_await linuxDiagMark(self, 'X');
 		if(oldPtr) {
 			uint64_t outraw[4] = {
 				old.handlerIp, linuxFlagsFromHandler(old),
