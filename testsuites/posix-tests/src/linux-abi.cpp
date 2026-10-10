@@ -220,9 +220,44 @@ DEFINE_TEST(linux_abi_dyn, ([] {
         assert(!unlink(path));
 }));
 
+extern "C" const unsigned char nomilia_linux_probe_blob[];
+extern "C" const unsigned long nomilia_linux_probe_size;
+
+// Nomilia: raw-syscall startup probe (musl startup order). Each step prints a
+// "pN" marker so a system death in the payload tests names the killer syscall.
+DEFINE_TEST(linux_abi_startup_probe, ([] {
+        const char *path = "/tmp/nomilia-linux-probe";
+
+        int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0777);
+        assert(fd >= 0);
+        ssize_t n = write(fd, nomilia_linux_probe_blob, nomilia_linux_probe_size);
+        assert(n == (ssize_t)nomilia_linux_probe_size);
+        assert(!close(fd));
+        assert(!chmod(path, 0755));
+
+        pid_t pid = fork();
+        assert(pid >= 0);
+        if(!pid) {
+                char *argv[] = { const_cast<char *>(path), nullptr };
+                char *envp[] = { nullptr };
+                execve(path, argv, envp);
+                _exit(127); // execve() failed.
+        }
+
+        int status = 0;
+        pid_t w = waitpid(pid, &status, 0);
+        assert(w == pid);
+        assert(WIFEXITED(status));
+        printf("posix-tests: linux_abi_startup_probe child exit = %d\n", WEXITSTATUS(status));
+        assert(WEXITSTATUS(status) == 49);
+
+        assert(!unlink(path));
+}));
+
 // Nomilia: real Linux payloads (built by ci/payloads/build-musl-busybox.sh and
 // delivered into the image) must run through the linux-abi layer: static
 // binaries directly, dynamic binaries through the ld-musl PT_INTERP path.
+// hello-* run before busybox: same musl startup, smaller binaries.
 DEFINE_TEST(linux_abi_payloads, ([] {
         auto spawn = [](const char *path, char *argv[]) -> int {
                 pid_t pid = fork();
@@ -261,6 +296,29 @@ DEFINE_TEST(linux_abi_payloads, ([] {
 
         int rStaticBusybox = -2, rHelloStatic = -2, rHelloDyn = -2, rBusyboxDyn = -2;
         {
+                printf("posix-tests: linux_abi_payloads: spawning hello-static\n");
+                fflush(stdout);
+                char a0[] = "hello-static";
+                char *argv[] = { a0, nullptr };
+                rHelloStatic = spawn("/usr/bin/hello-static", argv);
+        }
+        {
+                printf("posix-tests: linux_abi_payloads: spawning hello-dynamic\n");
+                fflush(stdout);
+                char a0[] = "hello-dynamic";
+                char *argv[] = { a0, nullptr };
+                rHelloDyn = spawn("/usr/bin/hello-dynamic", argv);
+        }
+        {
+                printf("posix-tests: linux_abi_payloads: spawning busybox-dynamic\n");
+                fflush(stdout);
+                char a0[] = "busybox-dynamic";
+                char a1[] = "echo";
+                char a2[] = "nomilia-busybox-dynamic";
+                char *argv[] = { a0, a1, a2, nullptr };
+                rBusyboxDyn = spawn("/usr/bin/busybox-dynamic", argv);
+        }
+        {
                 printf("posix-tests: linux_abi_payloads: spawning static busybox\n");
                 fflush(stdout);
                 char a0[] = "busybox";
@@ -283,29 +341,13 @@ DEFINE_TEST(linux_abi_payloads, ([] {
                 printf("posix-tests: linux_abi_payloads: busybox status raw = %d\n", status);
                 rStaticBusybox = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
         }
-        {
-                char a0[] = "hello-static";
-                char *argv[] = { a0, nullptr };
-                rHelloStatic = spawn("/usr/bin/hello-static", argv);
-        }
-        {
-                char a0[] = "hello-dynamic";
-                char *argv[] = { a0, nullptr };
-                rHelloDyn = spawn("/usr/bin/hello-dynamic", argv);
-        }
-        {
-                char a0[] = "busybox-dynamic";
-                char a1[] = "echo";
-                char a2[] = "nomilia-busybox-dynamic";
-                char *argv[] = { a0, a1, a2, nullptr };
-                rBusyboxDyn = spawn("/usr/bin/busybox-dynamic", argv);
-        }
 
         printf("posix-tests: linux_abi_payloads: results:"
                         " static-busybox=%d hello-static=%d hello-dynamic=%d"
                         " busybox-dynamic=%d\n",
                         rStaticBusybox, rHelloStatic, rHelloDyn, rBusyboxDyn);
-        assert(rStaticBusybox == 0);
+        assert(rHelloStatic == 0);
         assert(rHelloDyn == 0);
         assert(rBusyboxDyn == 0);
+        assert(rStaticBusybox == 0);
 }));

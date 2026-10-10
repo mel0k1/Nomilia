@@ -77,6 +77,14 @@ if host_machine.cpu_family() == 'x86_64'
 	socksig_blob = custom_target('linux-socksig-blob.c',
 				input : socksig_elf, output : 'linux-socksig-blob.c',
 				command : [py, files('gen-hello-blob.py'), '@INPUT@', '@OUTPUT@'])
+probe_elf = custom_target('nomilia-linux-probe.elf',
+			input : 'linux-hello/probe.S', output : 'nomilia-linux-probe.elf',
+			command : meson.get_compiler('c').cmd_array(), '-nostdlib', '-static', '-no-pie',
+					'-Wl,-e,_start', '-Wl,-Ttext=0x400000', '-Wl,--build-id=none',
+					'-o', '@OUTPUT@', '@INPUT@'])
+probe_blob = custom_target('linux-probe-blob.c',
+			input : probe_elf, output : 'linux-probe-blob.c',
+			command : [py, files('gen-hello-blob.py'), '@INPUT@', '@OUTPUT@'])
 	nld_elf = custom_target('nomilia-linux-nomilia-ld.elf',
 				input : 'linux-hello/nomilia-ld.S', output : 'nomilia-linux-nomilia-ld.elf',
 				command : [meson.get_compiler('c').cmd_array(), '-nostdlib', '-static', '-no-pie',
