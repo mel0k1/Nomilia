@@ -1161,7 +1161,7 @@ async::result<int64_t> linuxSocketpair(Process *self, uint64_t domain,
 	if(protocol && protocol != PF_UNSPEC)
 		co_return -EPROTONOSUPPORT;
 
-	auto pair = un_socket::createSocketPair(self.get(),
+	auto pair = un_socket::createSocketPair(self,
 			flags & SOCK_NONBLOCK, socktype);
 	auto fd0 = self->fileContext()->attachFile(std::get<0>(pair),
 			flags & SOCK_CLOEXEC);
@@ -1192,7 +1192,7 @@ async::result<int64_t> linuxBind(Process *self, int fd, uint64_t addrPtr,
 	if(addrLen && !co_await memRead(self->vmContext()->getSpace(), addrPtr,
 			addrLen, addrBuf))
 		co_return -EFAULT;
-	auto e = co_await file->bind(self.get(), addrBuf, addrLen);
+	auto e = co_await file->bind(self, addrBuf, addrLen);
 	co_return e == protocols::fs::Error::none ? 0 : -linuxFsErr(e);
 }
 
@@ -1207,7 +1207,7 @@ async::result<int64_t> linuxConnect(Process *self, int fd, uint64_t addrPtr,
 	if(addrLen && !co_await memRead(self->vmContext()->getSpace(), addrPtr,
 			addrLen, addrBuf))
 		co_return -EFAULT;
-	auto e = co_await file->connect(self.get(), addrBuf, addrLen);
+	auto e = co_await file->connect(self, addrBuf, addrLen);
 	co_return e == protocols::fs::Error::none ? 0 : -linuxFsErr(e);
 }
 
@@ -1225,7 +1225,7 @@ async::result<int64_t> linuxAccept(Process *self, int fd, uint64_t addrPtr,
 	auto file = self->fileContext()->getFile(fd);
 	if(!file)
 		co_return -EBADF;
-	auto result = co_await file->accept(self.get());
+	auto result = co_await file->accept(self);
 	if(!result)
 		co_return -linuxErr(result.error());
 	auto newFile = result.value();
@@ -1936,7 +1936,7 @@ async::result<LinuxSyscallOutcome> handleLinuxSyscall(std::shared_ptr<Process> s
 		break;
 	case kLinuxNrAccept:
 	case kLinuxNrAccept4:
-		ret = co_await linuxAccept(self, (int)a0, a1, a2,
+		ret = co_await linuxAccept(self.get(), (int)a0, a1, a2,
 				nr == kLinuxNrAccept4 ? (uint32_t)a3 : 0);
 		break;
 	case kLinuxNrSendto:
