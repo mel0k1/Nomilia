@@ -79,7 +79,7 @@ if host_machine.cpu_family() == 'x86_64'
 				command : [py, files('gen-hello-blob.py'), '@INPUT@', '@OUTPUT@'])
 probe_elf = custom_target('nomilia-linux-probe.elf',
 			input : 'linux-hello/probe.S', output : 'nomilia-linux-probe.elf',
-			command : meson.get_compiler('c').cmd_array(), '-nostdlib', '-static', '-no-pie',
+			command : [meson.get_compiler('c').cmd_array(), '-nostdlib', '-static', '-no-pie',
 					'-Wl,-e,_start', '-Wl,-Ttext=0x400000', '-Wl,--build-id=none',
 					'-o', '@OUTPUT@', '@INPUT@'])
 probe_blob = custom_target('linux-probe-blob.c',
