@@ -3,7 +3,8 @@
  * returned from via rt_sigreturn. Exit codes: 47 = success, otherwise
  * the failing step: 65 socketpair, 66 write, 67 read, 68 payload,
  * 69 close, 70 rt_sigaction, 71 rt_sigprocmask, 72 kill,
- * 73 handler timeout, 74 getsockname, 75 sockname family. */
+ * 73 handler timeout, 74 getsockname, 75 sockname family.
+ * Progress markers a..f and H go to stdout for CI diagnosis. */
 
         .section .note.ABI-tag, "a"
         .p2align 2
@@ -28,6 +29,15 @@ _start:
         syscall
         test %rax, %rax
         jnz .Lf65
+        mov $'a', %r14b
+
+        /* progress marker in r14b */
+        mov $1, %eax
+        mov $1, %edi
+        mov %r14b, .Lmark
+        lea .Lmark(%rip), %rsi
+        mov $1, %edx
+        syscall
 
         /* write(sv[0], "ping", 4) */
         mov $1, %eax
@@ -59,6 +69,15 @@ _start:
         jnz .Lf74
         cmpw $1, .Laddr(%rip)           /* AF_UNIX */
         jne .Lf75
+        mov $'b', %r14b
+
+        /* progress marker in r14b */
+        mov $1, %eax
+        mov $1, %edi
+        mov %r14b, .Lmark
+        lea .Lmark(%rip), %rsi
+        mov $1, %edx
+        syscall
 
         /* close both ends */
         mov $3, %eax
@@ -81,6 +100,15 @@ _start:
         syscall
         test %rax, %rax
         jnz .Lf70
+        mov $'c', %r14b
+
+        /* progress marker in r14b */
+        mov $1, %eax
+        mov $1, %edi
+        mov %r14b, .Lmark
+        lea .Lmark(%rip), %rsi
+        mov $1, %edx
+        syscall
 
         /* rt_sigprocmask(SIG_SETMASK, {0}, &old, 8) */
         mov $14, %eax
@@ -91,6 +119,15 @@ _start:
         syscall
         test %rax, %rax
         jnz .Lf71
+        mov $'d', %r14b
+
+        /* progress marker in r14b */
+        mov $1, %eax
+        mov $1, %edi
+        mov %r14b, .Lmark
+        lea .Lmark(%rip), %rsi
+        mov $1, %edx
+        syscall
 
         /* kill(getpid(), SIGUSR1): the handler bumps .Lflag */
         mov $39, %eax
@@ -102,6 +139,15 @@ _start:
         syscall
         test %rax, %rax
         jnz .Lf72
+        mov $'e', %r14b
+
+        /* progress marker in r14b */
+        mov $1, %eax
+        mov $1, %edi
+        mov %r14b, .Lmark
+        lea .Lmark(%rip), %rsi
+        mov $1, %edx
+        syscall
 
         /* bounded wait for the handler */
         mov $500000, %r13
@@ -115,6 +161,15 @@ _start:
         jmp .Lf73
 
 .Lhandok:
+        mov $'f', %r14b
+
+        /* progress marker in r14b */
+        mov $1, %eax
+        mov $1, %edi
+        mov %r14b, .Lmark
+        lea .Lmark(%rip), %rsi
+        mov $1, %edx
+        syscall
         mov $47, %edi
         jmp .Lexit
 
@@ -162,6 +217,15 @@ _start:
         lea .LmsgH(%rip), %rsi
         mov $1, %edx
         syscall
+        mov $'H', %r14b
+
+        /* progress marker in r14b */
+        mov $1, %eax
+        mov $1, %edi
+        mov %r14b, .Lmark
+        lea .Lmark(%rip), %rsi
+        mov $1, %edx
+        syscall
         movq $1, .Lflag(%rip)
         ret
 .Lrestore:
@@ -185,3 +249,4 @@ _start:
 .Lempty: .quad 0
 .Lold:  .quad 0
 .Lflag: .quad 0
+.Lmark: .byte 0
