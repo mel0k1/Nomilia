@@ -53,6 +53,8 @@ constexpr uint64_t kLinuxNrFstat = 5;
 constexpr uint64_t kLinuxNrLstat = 6;
 constexpr uint64_t kLinuxNrLseek = 8;
 constexpr uint64_t kLinuxNrPread64 = 17;
+constexpr uint64_t kLinuxNrReadv = 19;
+constexpr uint64_t kLinuxNrWritev = 20;
 constexpr uint64_t kLinuxNrPwrite64 = 18;
 constexpr uint64_t kLinuxNrDup = 32;
 constexpr uint64_t kLinuxNrDup2 = 33;
@@ -114,6 +116,7 @@ constexpr uint64_t kLinuxUnblockableSet =
 constexpr int kLinuxAtFdcwd = -100;
 constexpr size_t kLinuxPathMax = 4096;
 constexpr size_t kLinuxStringMax = 65536;
+constexpr uint64_t kLinuxIovMax = 1024; // Linux IOV_MAX.
 constexpr size_t kLinuxIoMax = 0x400000; // bounce buffer cap (4 MiB).
 constexpr uint64_t kLinuxAtSymlinkNofollow = 0x100;
 constexpr uint64_t kLinuxAtEmptyPath = 0x1000;
@@ -492,6 +495,87 @@ async::result<int64_t> linuxPwrite(Process *self, int fd, uintptr_t bufPtr,
 	if(!result)
 		co_return -linuxErr(result.error());
 	co_return (int64_t)result.value();
+}
+
+// Linux x86_64 struct iovec layout.
+struct LinuxIovec {
+	uint64_t iovBase;
+	uint64_t iovLen;
+};
+static_assert(sizeof(LinuxIovec) == 16);
+
+// Loads the user iovec array; caps the total transfer size.
+async::result<int64_t> linuxSetupIov(helix::BorrowedDescriptor space, uintptr_t iovPtr,
+		uint64_t iovcnt, std::vector<LinuxIovec> &iovs, size_t &total) {
+	if(iovcnt > kLinuxIovMax)
+		co_return -EINVAL;
+	iovs.resize(iovcnt);
+	if(iovcnt && !co_await memRead(space, iovPtr, iovcnt * sizeof(LinuxIovec), iovs.data()))
+		co_return -EFAULT;
+	total = 0;
+	for(auto &iov : iovs) {
+		total += iov.iovLen;
+		if(total > kLinuxIoMax)
+			co_return -EINVAL; // bounce buffer cap.
+	}
+	co_return 0;
+}
+
+async::result<int64_t> linuxWritev(Process *self, int fd, uintptr_t iovPtr, uint64_t iovcnt) {
+	auto file = self->fileContext()->getFile(fd);
+	if(!file)
+		co_return -EBADF;
+	if(!iovcnt)
+		co_return 0;
+	auto space = self->vmContext()->getSpace();
+	std::vector<LinuxIovec> iovs;
+	size_t total = 0;
+	auto setup = co_await linuxSetupIov(space, iovPtr, iovcnt, iovs, total);
+	if(setup)
+		co_return setup;
+	auto bounce = std::make_unique<char[]>(total);
+	size_t off = 0;
+	for(auto &iov : iovs) {
+		if(!iov.iovLen)
+			continue;
+		if(!co_await memRead(space, iov.iovBase, iov.iovLen, bounce.get() + off))
+			co_return -EFAULT;
+		off += iov.iovLen;
+	}
+	auto result = co_await file->writeAll(self, bounce.get(), total);
+	if(!result)
+		co_return -linuxErr(result.error());
+	co_return (int64_t)result.value();
+}
+
+async::result<int64_t> linuxReadv(Process *self, int fd, uintptr_t iovPtr, uint64_t iovcnt) {
+	auto file = self->fileContext()->getFile(fd);
+	if(!file)
+		co_return -EBADF;
+	if(!iovcnt)
+		co_return 0;
+	auto space = self->vmContext()->getSpace();
+	std::vector<LinuxIovec> iovs;
+	size_t total = 0;
+	auto setup = co_await linuxSetupIov(space, iovPtr, iovcnt, iovs, total);
+	if(setup)
+		co_return setup;
+	auto bounce = std::make_unique<char[]>(total);
+	auto result = co_await file->readSome(self, bounce.get(), total,
+			async::cancellation_token{});
+	if(!result)
+		co_return -linuxErr(result.error());
+	size_t n = result.value();
+	size_t off = 0;
+	for(auto &iov : iovs) {
+		if(off == n)
+			break;
+		size_t chunk = std::min<size_t>(iov.iovLen, n - off);
+		if(chunk && !co_await memWrite(space, iov.iovBase, chunk, bounce.get() + off))
+			co_return -EFAULT;
+		off += chunk;
+	}
+	co_return (int64_t)n;
 }
 
 async::result<int64_t> openAtImpl(std::shared_ptr<Process> self, int dirfd,
@@ -1852,6 +1936,12 @@ async::result<LinuxSyscallOutcome> handleLinuxSyscall(std::shared_ptr<Process> s
 		break;
 	case kLinuxNrPread64:
 		ret = co_await linuxPread(self.get(), (int)a0, a1, a2, (int64_t)a3);
+		break;
+	case kLinuxNrReadv:
+		ret = co_await linuxReadv(self.get(), (int)a0, a1, a2);
+		break;
+	case kLinuxNrWritev:
+		ret = co_await linuxWritev(self.get(), (int)a0, a1, a2);
 		break;
 	case kLinuxNrPwrite64:
 		ret = co_await linuxPwrite(self.get(), (int)a0, a1, a2, (int64_t)a3);

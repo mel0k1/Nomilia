@@ -77,6 +77,8 @@ enum LinuxSyscall : uint64_t {
 	kLinuxNrLstat = 6,
 	kLinuxNrLseek = 8,
 	kLinuxNrPread64 = 17,
+	kLinuxNrReadv = 19,
+	kLinuxNrWritev = 20,
 	kLinuxNrPwrite64 = 18,
 	kLinuxNrDup = 32,
 	kLinuxNrDup2 = 33,
@@ -567,6 +569,8 @@ bool linuxHandleSyscall(SyscallImageAccessor image) {
 	case kLinuxNrLstat:
 	case kLinuxNrLseek:
 	case kLinuxNrPread64:
+	case kLinuxNrReadv:
+	case kLinuxNrWritev:
 	case kLinuxNrPwrite64:
 	case kLinuxNrDup:
 	case kLinuxNrDup2:
