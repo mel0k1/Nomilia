@@ -1,4 +1,4 @@
-# Linux ABI: слой linux-sysdeps (v1 + v2 + v3)
+# Linux ABI: слой linux-sysdeps (v1 + v2 + v3 + v4)
 
 Цель — исполнять **немодифицированные** Linux-бинарники (в первую очередь статические musl: busybox)
 без пересборки и без патчей к бинарникам. v1 — диспетчер в ядре thor: «сырой» Linux-номер
@@ -168,15 +168,61 @@ pipe2 → write/read через канал → ioctl на pipe fd == -ENOTTY →
 faccessat на отсутствующий путь == -ENOENT → statx("/tmp"): stx_ino ≠ 0, STATX_INO в mask,
 S_IFDIR в stx_mode.
 
-## Ограничения v1, фаза 2 и v3
+## Фаза 2 v4: socket-сисколлы + rt_sigaction/rt_sigprocmask
+
+Sockets and signals complete the busybox syscall surface. Same transport
+(superLinuxSyscall upcall, Linux registers decoded in the observe loop).
+
+**Sockets (17 номеров).** `socket`(41), `socketpair`(53), `bind`(49),
+`connect`(42), `listen`(50), `accept`(43)/`accept4`(288), `sendto`(44),
+`recvfrom`(45), `sendmsg`(46), `recvmsg`(47), `shutdown`(48),
+`getsockname`(51), `getpeername`(52), `setsockopt`(54), `getsockopt`(55).
+Реализация переиспользует штатную сокетную машинерию posix: AF_UNIX —
+`un_socket::createSocketFile/createSocketPair`, AF_INET/AF_PACKET/NETLINK_ROUTE —
+`extern_socket::createSocket` (netserver), прочие netlink-протоколы —
+`netlink::nl_socket`. Адреса передаются как сырые байты (Linux-раскладка
+sockaddr совпадает с managarm-mlibc); sendmsg/recvmsg работают с iovec-цепочками
+(гатеринг/скаттеринг через bounce-буфер) и поддерживают msg_name; msg_control
+(cmsg) пока не поддерживается — EINVAL.
+
+**Сигналы.** `rt_sigaction`(13), `rt_sigprocmask`(14), `rt_sigreturn`(15),
+плюс `kill`(62) и `tgkill`(234) для самотестирования и busybox kill.
+- rt_sigaction читает/пишет Linux `struct rt_sigaction` (handler/flags/restorer/
+  mask, sigsetsize=8) и отображает его на штатную таблицу `SignalContext`
+  posix: SIG_DFL/SIG_IGN → none/ignore, SA_SIGINFO/SA_ONSTACK/SA_RESETHAND/
+  SA_NODEFER → signalInfo/signalOnStack/signalOnce/signalReentrant,
+  SA_RESTORER → restorerIp.
+- rt_sigprocmask (SIG_BLOCK=0/SIG_UNBLOCK=1/SIG_SETMASK=2) работает с маской
+  потока (`Process::signalMask`), биты SIGKILL/SIGSTOP снять нельзя.
+- **Доставка обработчиков**: `SignalContext::raiseContext` для Linux-персоны
+  строит **Linux rt_sigframe** (pretcode=SA_RESTORER, siginfo 128 байт,
+  ucontext 304 байта с gregs[23] в порядке musl, хвост — блоб SIMD от ядра)
+  и входит в обработчик с Linux-конвенцией (rdi=signo, rsi=siginfo,
+  rdx=ucontext). Возврат — через `rt_sigreturn`(15): posix восстанавливает
+  gregs/SIMD/маску из фрейма и отвечает outcome'ом `committed` (observe-цикл
+  только делает helResume, не трогая регистры).
+- Асинхронная доставка работает через штатный `serveSignals` →
+  helInterruptThread → kHelObserveInterrupt — сигнал, выданный во время
+  upcall (например SIGPIPE из sendMsg), обрабатывается сразу после resume.
+
+**Исправление v2-регистров.** observe-цикл больше не пишет `kHelRegError`
+(RDI=0) при возврате из Linux-сисколла: в Linux-ABI RDI несёт a0, а слот
+ошибки Hel клиенту не виден. Раньше это молча портило RDI (на простых тестах
+не проявлялось, для скомпилированного кода опасно).
+
+## Ограничения v1, фаза 2, v3 и v4
 
 - **ioctl** покрывает только TCGETS/TCSETS/TIOCG(W)INSZ; FIONREAD/FIONBIO/TIOCGPGRP и прочие —
-  ENOTTY. **socket-сисколлы** (socket/connect/...) — следующий заход.
+  ENOTTY.
+- **cmsg** в sendmsg/recvmsg не поддерживается (SCM_RIGHTS/SCM_CREDENTIALS) — EINVAL;
+  AF_INET6 и broadcast kill(-1) — EAFNOSUPPORT/-EPERM; SA_NOCLDSTOP/SA_NOCLDWAIT/SA_RESTART
+  принимаются, но не имеют побочных эффектов.
 - **faccessat** проверяет права по euid/egid (без AT_EACCESS-семантики реальных id) — для
   busybox-сценариев достаточно.
 - **Отмена операций**: Linux-потоки не подключены к `CancelEventRegistry` — блокирующий read/wait
   не прерывается сигналом (EINTR не эмулируется).
-- **Динамические Linux-бинарники** всё ещё отвергаются: ld.so требует расширенной таблицы сисколлов.
+- **Динамические Linux-бинарники** всё ещё отвергаются: ld.so требует расширенной таблицы сисколлов
+  (v4 закрыл socket/signal-часть этой потребности; следующим заходом — vDSO и загрузка PT_INTERP).
 - **CLOCK_REALTIME** в ядре пока boot-relative; для mlibc-программ точное время даёт vDSO/tracker.
 - **pids/uid** — getpid/getppid/gettid настоящие; uid-семейство пока заглушки в ядре.
 - Детект по ABI-tag/интерпретатору покрывает glibc-статик, musl-динамик и наш тест; glibc-динамик
@@ -201,4 +247,8 @@ S_IFDIR в stx_mode.
 | `posix/subsystem/src/file.hpp` | v3: виртуальные getTermios/setTermios/getWinsize/setWinsize |
 | `posix/subsystem/src/pts.cpp` | v3: терминальные оверрайды (termios/winsize + SIGWINCH) |
 | `posix/subsystem/src/devices/ttyn.cpp` | v3: терминальные оверрайды консоли (80x24) |
-| `testsuites/posix-tests/*` | тесты + hello.S/dirstat.S + gen-hello-blob.py |
+| `posix/subsystem/src/linux-abi.cpp` | v4: socket-сисколлы, rt_sigaction/rt_sigprocmask/rt_sigreturn, raiseLinuxContext (rt_sigframe) |
+| `posix/subsystem/src/observations.cpp` | v4: режим `committed` + отказ от записи kHelRegError (сохранение RDI) |
+| `posix/subsystem/src/process.cpp` | v4: ветка Linux-персоны в SignalContext::raiseContext |
+| `kernel/thor/generic/linux-abi.cpp` | v4: passthrough socket/signal номеров (13–15, 41–55, 62, 234, 288) |
+| `testsuites/posix-tests/*` | тесты + hello.S/dirstat.S/socksig.S + gen-hello-blob.py |

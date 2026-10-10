@@ -11,6 +11,7 @@
 #include <core/clock.hpp>
 #include "exec.hpp"
 #include "gdbserver.hpp"
+#include "linux-abi.hpp"
 #include "process.hpp"
 
 #include <core/process-data.hpp>
@@ -966,6 +967,12 @@ async::result<void> SignalContext::raiseContext(SignalItem *item, Process *proce
 	}
 
 	auto thread = process->threadDescriptor();
+
+	// Nomilia: Linux-abi threads return from handlers via the Linux
+	// rt_sigreturn syscall, so the frame layout differs from SignalFrame.
+	if(process->isLinuxPersonality())
+		co_return co_await raiseLinuxContext(item, process, handling);
+
 	SignalFrame sf;
 	memset(&sf, 0, sizeof(SignalFrame));
 

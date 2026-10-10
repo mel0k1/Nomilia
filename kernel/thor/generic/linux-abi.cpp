@@ -96,6 +96,28 @@ enum LinuxSyscall : uint64_t {
 	kLinuxNrPipe2 = 293,
 	kLinuxNrStatx = 332,
 	kLinuxNrFaccessat2 = 439,
+	// v4: sockets and signals, also served by the POSIX subsystem.
+	kLinuxNrRtSigaction = 13,
+	kLinuxNrRtSigprocmask = 14,
+	kLinuxNrRtSigreturn = 15,
+	kLinuxNrSocket = 41,
+	kLinuxNrConnect = 42,
+	kLinuxNrAccept = 43,
+	kLinuxNrSendto = 44,
+	kLinuxNrRecvfrom = 45,
+	kLinuxNrSendmsg = 46,
+	kLinuxNrRecvmsg = 47,
+	kLinuxNrShutdown = 48,
+	kLinuxNrBind = 49,
+	kLinuxNrListen = 50,
+	kLinuxNrGetsockname = 51,
+	kLinuxNrGetpeername = 52,
+	kLinuxNrSocketpair = 53,
+	kLinuxNrSetsockopt = 54,
+	kLinuxNrGetsockopt = 55,
+	kLinuxNrKill = 62,
+	kLinuxNrTgkill = 234,
+	kLinuxNrAccept4 = 288,
 };
 
 // protocols/posix/supercalls.hpp: superExit. Thor only forwards the number;
@@ -566,6 +588,27 @@ bool linuxHandleSyscall(SyscallImageAccessor image) {
 	case kLinuxNrFaccessat2:
 	case kLinuxNrStatx:
 	case kLinuxNrPipe2:
+	case kLinuxNrRtSigaction:
+	case kLinuxNrRtSigprocmask:
+	case kLinuxNrRtSigreturn:
+	case kLinuxNrSocket:
+	case kLinuxNrConnect:
+	case kLinuxNrAccept:
+	case kLinuxNrSendto:
+	case kLinuxNrRecvfrom:
+	case kLinuxNrSendmsg:
+	case kLinuxNrRecvmsg:
+	case kLinuxNrShutdown:
+	case kLinuxNrBind:
+	case kLinuxNrListen:
+	case kLinuxNrGetsockname:
+	case kLinuxNrGetpeername:
+	case kLinuxNrSocketpair:
+	case kLinuxNrSetsockopt:
+	case kLinuxNrGetsockopt:
+	case kLinuxNrKill:
+	case kLinuxNrTgkill:
+	case kLinuxNrAccept4:
 		Thread::interruptCurrent(static_cast<Interrupt>(kIntrSuperCall
 					+ kPosixSuperLinuxSyscall), image, {});
 		return true;

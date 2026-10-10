@@ -717,10 +717,13 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			auto outcome = co_await handleLinuxSyscall(self, thread, nr, args);
 
 			if(outcome.resume) {
-				gprs[kHelRegError] = kHelErrNone;
+				// No Hel error slot here: the Linux ABI keeps RDI alive.
 				// Linux returns the result (or -errno) in RAX.
 				gprs[kHelRegArg2] = static_cast<uint64_t>(outcome.value);
 				HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
+				HEL_CHECK(helResume(thread.getHandle()));
+			}else if(outcome.committed) {
+				// rt_sigreturn already restored the full register image.
 				HEL_CHECK(helResume(thread.getHandle()));
 			}
 		}else if(observe.observation() == kHelObserveInterrupt) {

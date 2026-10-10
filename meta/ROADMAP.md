@@ -36,10 +36,14 @@
 - [x] тест `linux_abi_static_hello`: fork + execve немодифицированного статического Linux-ELF (raw syscalls, без libc) → exit 42
 - [x] linux-sysdeps v2 (фаза 2): файловые/процессные Linux-сисколлы через upcall `superLinuxSyscall` (штатный observe-канал posix): open/openat/read/write/close/lseek/stat/lstat/fstat/fstatat/pread64/pwrite64/dup/dup2/dup3/getpid/getppid/gettid/getcwd, fork/vfork/execve/wait4; personality наследуется при fork/clone (abi в `helCreateThread` fork/clone-путей, `ExecuteResult.isLinux`)
 - [x] тесты `linux_abi_files` (open/write/read/lseek roundtrip → exit 43) и `linux_abi_fork_exec` (fork/wait4 внутри Linux-персоны → exit 45)
+- [x] linux-sysdeps v3: getdents64 (linux_dirent64), ioctl (TCGETS/TCSETS/TIOCGWINSZ/TIOCSWINSZ), statx (+AT_EMPTY_PATH), pipe/pipe2, faccessat/faccessat2; синтез S_IF*-битов типа файла в stat-режимах
+- [x] тест `linux_abi_dirstat` (getdents64-цепочка, ioctl-консоль, pipe2-roundtrip, faccessat, statx → exit 46)
+- [x] linux-sysdeps v4: socket-сисколлы поверх штатной сокетной машинерии posix (AF_UNIX/AF_INET/AF_PACKET/AF_NETLINK) и сигналы: rt_sigaction/rt_sigprocmask на штатной SignalContext-таблице, доставка обработчиков через Linux rt_sigframe + rt_sigreturn (режим `committed`), kill/tgkill; фикс: observe-цикл не затирает RDI (kHelRegError) при возврате из Linux-сисколла
+- [x] тест `linux_abi_socksig` (socketpair-roundtrip + getsockname, sigaction/sigprocmask, доставка SIGUSR1-обработчика с возвратом через rt_sigreturn → exit 47)
 - [x] uname: Linux-совместимое `utsname` (имя ядра, версия в формате Linux)
 - [ ] Тест-матрица: busybox (sh, ls, ps, top), статические утилиты
 
-**DoD**: `qemu: nomilia /bin/busybox sh` — интерактивная сессия без падений. (v1+v2+v3 выполнены: execve Linux-ELF, файловые сисколлы и fork/exec/wait4, getdents64/ioctl(TCGETS/TCSETS/TIOCGWINSZ)/statx/pipe2/faccessat внутри Linux-персональности; остальное — socket-сисколлы, сигналы rt_sigaction, динамические бинарники)
+**DoD**: `qemu: nomilia /bin/busybox sh` — интерактивная сессия без падений. (v1+v2+v3+v4 выполнены: execve Linux-ELF, файловые сисколлы и fork/exec/wait4, getdents64/ioctl(TCGETS/TCSETS/TIOCGWINSZ)/statx/pipe2/faccessat, socket-семейство (socket/socketpair/bind/connect/listen/accept4/sendto/recvfrom/sendmsg/recvmsg/shutdown/sockname/peername/sockopt) и сигналы (rt_sigaction/rt_sigprocmask/rt_sigreturn с Linux rt_sigframe + kill/tgkill) внутри Linux-персональности; остальное — vDSO-публикация в auxv Linux-процессов и динамические бинарники)
 
 ## Этап 3 — Linux ABI v2: динамические программы
 

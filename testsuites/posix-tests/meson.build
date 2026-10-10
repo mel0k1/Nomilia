@@ -69,6 +69,14 @@ if host_machine.cpu_family() == 'x86_64'
 	dirstat_blob = custom_target('linux-dirstat-blob.c',
 				input : dirstat_elf, output : 'linux-dirstat-blob.c',
 				command : [py, files('gen-hello-blob.py'), '@INPUT@', '@OUTPUT@'])
-	src += [hello_blob, files_blob, forky_blob, dirstat_blob]
+	socksig_elf = custom_target('nomilia-linux-socksig.elf',
+				input : 'linux-hello/socksig.S', output : 'nomilia-linux-socksig.elf',
+				command : [meson.get_compiler('c').cmd_array(), '-nostdlib', '-static', '-no-pie',
+					'-Wl,-e,_start', '-Wl,-Ttext=0x400000', '-Wl,--build-id=none',
+					'-o', '@OUTPUT@', '@INPUT@'])
+	socksig_blob = custom_target('linux-socksig-blob.c',
+				input : socksig_elf, output : 'linux-socksig-blob.c',
+				command : [py, files('gen-hello-blob.py'), '@INPUT@', '@OUTPUT@'])
+	src += [hello_blob, files_blob, forky_blob, dirstat_blob, socksig_blob]
 endif
 executable('posix-tests', src, dependencies: [cli11_dep, frigg], install : true)

@@ -15,6 +15,9 @@ struct Process;
 struct LinuxSyscallOutcome {
 	bool resume = true;
 	int64_t value = 0;
+	// The handler already stored the full register image (rt_sigreturn);
+	// the observe loop must only resume the thread.
+	bool committed = false;
 };
 
 async::result<LinuxSyscallOutcome> handleLinuxSyscall(std::shared_ptr<Process> self,

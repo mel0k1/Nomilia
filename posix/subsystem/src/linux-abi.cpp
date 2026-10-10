@@ -4,6 +4,11 @@
 // re-runs them through the regular POSIX/VFS APIs of the process.
 #include <errno.h>
 #include <fcntl.h>
+#include <netinet/in.h>
+#include <signal.h>
+#include <sys/socket.h>
+#include <sys/uio.h>
+#include <sys/un.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -28,8 +33,13 @@
 #include "fifo.hpp"
 #include "file.hpp"
 #include "linux-abi.hpp"
+#include "net.hpp"
+#include "extern_socket.hpp"
+#include "un-socket.hpp"
 #include "process.hpp"
 #include "vfs.hpp"
+#include "netlink/nl-socket.hpp"
+#include <linux/netlink.h>
 
 namespace {
 
@@ -64,6 +74,42 @@ constexpr uint64_t kLinuxNrPipe2 = 293;
 constexpr uint64_t kLinuxNrStatx = 332;
 constexpr uint64_t kLinuxNrFaccessat2 = 439;
 constexpr uint64_t kLinuxNrDup3 = 292;
+
+// Linux x86_64 syscall numbers, v4 (sockets and signals).
+constexpr uint64_t kLinuxNrRtSigaction = 13;
+constexpr uint64_t kLinuxNrRtSigprocmask = 14;
+constexpr uint64_t kLinuxNrRtSigreturn = 15;
+constexpr uint64_t kLinuxNrSocket = 41;
+constexpr uint64_t kLinuxNrConnect = 42;
+constexpr uint64_t kLinuxNrAccept = 43;
+constexpr uint64_t kLinuxNrSendto = 44;
+constexpr uint64_t kLinuxNrRecvfrom = 45;
+constexpr uint64_t kLinuxNrSendmsg = 46;
+constexpr uint64_t kLinuxNrRecvmsg = 47;
+constexpr uint64_t kLinuxNrShutdown = 48;
+constexpr uint64_t kLinuxNrBind = 49;
+constexpr uint64_t kLinuxNrListen = 50;
+constexpr uint64_t kLinuxNrGetsockname = 51;
+constexpr uint64_t kLinuxNrGetpeername = 52;
+constexpr uint64_t kLinuxNrSocketpair = 53;
+constexpr uint64_t kLinuxNrSetsockopt = 54;
+constexpr uint64_t kLinuxNrGetsockopt = 55;
+constexpr uint64_t kLinuxNrKill = 62;
+constexpr uint64_t kLinuxNrTgkill = 234;
+constexpr uint64_t kLinuxNrAccept4 = 288;
+
+// Linux uapi bits that the libc headers do not provide under these names.
+constexpr uint32_t kLinuxSockTypeMask = 0xF;
+constexpr uint32_t kLinuxSaSiginfo = 4;
+constexpr uint32_t kLinuxSaOnstack = 0x08000000;
+constexpr uint32_t kLinuxSaRestorer = 0x04000000;
+constexpr uint32_t kLinuxSaNodefer = 0x40000000;
+constexpr uint32_t kLinuxSaResethand = 0x80000000;
+constexpr int kLinuxSigBlock = 0;
+constexpr int kLinuxSigUnblock = 1;
+constexpr int kLinuxSigSetmask = 2;
+constexpr uint64_t kLinuxUnblockableSet =
+	(UINT64_C(1) << (SIGKILL - 1)) | (UINT64_C(1) << (SIGSTOP - 1));
 
 constexpr int kLinuxAtFdcwd = -100;
 constexpr size_t kLinuxPathMax = 4096;
@@ -982,8 +1028,751 @@ async::result<int64_t> linuxFAccessat(std::shared_ptr<Process> self, int dirfd,
 	co_return 0;
 }
 
+// ------------------------------------------------------------------
+// v4: sockets and signals.
+
+// Linux x86_64 struct msghdr.
+struct LinuxMsgHeader {
+	uint64_t msgName;
+	uint32_t msgNameLen;
+	uint32_t pad0;
+	uint64_t msgIov;
+	uint64_t msgIovLen;
+	uint64_t msgControl;
+	uint64_t msgControlLen;
+	int32_t msgFlags;
+	uint32_t pad1;
+};
+static_assert(sizeof(LinuxMsgHeader) == 56);
+
+// Linux x86_64 ucontext/sigcontext as stored in an rt_sigframe.
+// gregs follows the musl/glibc mcontext_t order (REG_R8..REG_CR2).
+struct LinuxSigcontext {
+	uint64_t gregs[23];
+	uint64_t fpregs;
+	uint64_t reserved[8];
+};
+static_assert(sizeof(LinuxSigcontext) == 256);
+
+struct LinuxUcontext {
+	uint64_t ucFlags;
+	uint64_t ucLink;
+	uint64_t ucStackSp;
+	uint32_t ucStackFlags;
+	uint32_t ucStackPad;
+	uint64_t ucStackSize;
+	LinuxSigcontext ucMcontext;
+	uint64_t ucSigmask;
+};
+static_assert(sizeof(LinuxUcontext) == 304);
+
+// rt_sigframe: pretcode(8) + siginfo(128) + ucontext(304); the SIMD blob
+// saved by the kernel is appended behind the ucontext.
+constexpr size_t kLinuxSigframeInfoOff = 8;
+constexpr size_t kLinuxSigframeUcOff = 136;
+constexpr size_t kLinuxSigframeFpOff = 440;
+// At the rt_sigreturn syscall the restorer has just been RET'd to, so RSP
+// points at siginfo and the ucontext sits 128 bytes above it.
+constexpr size_t kLinuxSigreturnUcDelta = 128;
+
+size_t linuxSimdStateSize() {
+	static size_t cached = [] {
+		HelRegisterInfo info{};
+		HEL_CHECK(helQueryRegisterInfo(kHelRegsSimd, &info));
+		return (size_t)info.setSize;
+	}();
+	return cached;
+}
+
+struct ucred linuxCreds(Process *self) {
+	struct ucred creds{};
+	creds.pid = self->pid();
+	creds.uid = self->threadGroup()->euid();
+	creds.gid = self->threadGroup()->egid();
+	return creds;
+}
+
+// --------------------------------------------------------------- sockets
+
+async::result<int64_t> linuxSocket(Process *self, uint64_t domain,
+		uint64_t type, uint64_t protocol) {
+	if(type & ~uint64_t(kLinuxSockTypeMask | SOCK_NONBLOCK | SOCK_CLOEXEC))
+		co_return -EINVAL;
+	uint32_t flags = 0;
+	if(type & SOCK_NONBLOCK)
+		flags |= SOCK_NONBLOCK;
+	if(type & SOCK_CLOEXEC)
+		flags |= SOCK_CLOEXEC;
+	int socktype = type & kLinuxSockTypeMask;
+
+	smarter::shared_ptr<File, FileHandle> file;
+	if(domain == AF_UNIX) {
+		if(socktype != SOCK_DGRAM && socktype != SOCK_STREAM
+				&& socktype != SOCK_SEQPACKET)
+			co_return -EPROTOTYPE;
+		if(protocol)
+			co_return -EPROTONOSUPPORT;
+		auto un = un_socket::createSocketFile(flags & SOCK_NONBLOCK, socktype);
+		if(!un)
+			co_return -linuxErr(un.error());
+		file = std::move(un.value());
+	}else if(domain == AF_NETLINK) {
+		if(socktype != SOCK_RAW && socktype != SOCK_DGRAM)
+			co_return -ESOCKTNOSUPPORT;
+		if(protocol == NETLINK_ROUTE) {
+			file = co_await extern_socket::createSocket(
+				co_await net::getNetLane(), domain, socktype,
+				protocol, flags & SOCK_NONBLOCK);
+		}else if(netlink::nl_socket::protocol_supported(protocol)) {
+			file = netlink::nl_socket::createSocketFile(protocol, socktype,
+					flags & SOCK_NONBLOCK);
+		}else{
+			co_return -EPROTONOSUPPORT;
+		}
+	}else if(domain == AF_INET || domain == AF_PACKET) {
+		file = co_await extern_socket::createSocket(
+			co_await net::getNetLane(), domain, socktype,
+			protocol, flags & SOCK_NONBLOCK);
+	}else{
+		co_return -EAFNOSUPPORT;
+	}
+
+	auto fd = self->fileContext()->attachFile(file, flags & SOCK_CLOEXEC);
+	if(!fd)
+		co_return -linuxErr(fd.error());
+	co_return fd.value();
+}
+
+async::result<int64_t> linuxSocketpair(Process *self, uint64_t domain,
+		uint64_t type, uint64_t protocol, uint64_t svPtr) {
+	if(domain != AF_UNIX)
+		co_return -EOPNOTSUPP;
+	if(type & ~uint64_t(kLinuxSockTypeMask | SOCK_NONBLOCK | SOCK_CLOEXEC))
+		co_return -EINVAL;
+	uint32_t flags = 0;
+	if(type & SOCK_NONBLOCK)
+		flags |= SOCK_NONBLOCK;
+	if(type & SOCK_CLOEXEC)
+		flags |= SOCK_CLOEXEC;
+	int socktype = type & kLinuxSockTypeMask;
+	if(socktype != SOCK_DGRAM && socktype != SOCK_STREAM
+			&& socktype != SOCK_SEQPACKET)
+		co_return -EPROTOTYPE;
+	if(protocol && protocol != PF_UNSPEC)
+		co_return -EPROTONOSUPPORT;
+
+	auto pair = un_socket::createSocketPair(self.get(),
+			flags & SOCK_NONBLOCK, socktype);
+	auto fd0 = self->fileContext()->attachFile(std::get<0>(pair),
+			flags & SOCK_CLOEXEC);
+	auto fd1 = self->fileContext()->attachFile(std::get<1>(pair),
+			flags & SOCK_CLOEXEC);
+	if(!fd0 || !fd1) {
+		if(fd0)
+			self->fileContext()->closeFile(fd0.value());
+		if(fd1)
+			self->fileContext()->closeFile(fd1.value());
+		co_return -linuxErr(!fd0 ? fd0.error() : fd1.error());
+	}
+	int fds[2] = {fd0.value(), fd1.value()};
+	if(!co_await memWrite(self->vmContext()->getSpace(), svPtr,
+			sizeof(fds), fds))
+		co_return -EFAULT;
+	co_return 0;
+}
+
+async::result<int64_t> linuxBind(Process *self, int fd, uint64_t addrPtr,
+		uint64_t addrLen) {
+	auto file = self->fileContext()->getFile(fd);
+	if(!file)
+		co_return -EBADF;
+	std::byte addrBuf[128];
+	if(addrLen > sizeof(addrBuf))
+		co_return -EINVAL;
+	if(addrLen && !co_await memRead(self->vmContext()->getSpace(), addrPtr,
+			addrLen, addrBuf))
+		co_return -EFAULT;
+	auto e = co_await file->bind(self.get(), addrBuf, addrLen);
+	co_return e == protocols::fs::Error::none ? 0 : -linuxFsErr(e);
+}
+
+async::result<int64_t> linuxConnect(Process *self, int fd, uint64_t addrPtr,
+		uint64_t addrLen) {
+	auto file = self->fileContext()->getFile(fd);
+	if(!file)
+		co_return -EBADF;
+	std::byte addrBuf[128];
+	if(addrLen > sizeof(addrBuf))
+		co_return -EINVAL;
+	if(addrLen && !co_await memRead(self->vmContext()->getSpace(), addrPtr,
+			addrLen, addrBuf))
+		co_return -EFAULT;
+	auto e = co_await file->connect(self.get(), addrBuf, addrLen);
+	co_return e == protocols::fs::Error::none ? 0 : -linuxFsErr(e);
+}
+
+async::result<int64_t> linuxListen(Process *self, int fd, int backlog) {
+	(void)backlog;
+	auto file = self->fileContext()->getFile(fd);
+	if(!file)
+		co_return -EBADF;
+	auto e = co_await file->listen();
+	co_return e == protocols::fs::Error::none ? 0 : -linuxFsErr(e);
+}
+
+async::result<int64_t> linuxAccept(Process *self, int fd, uint64_t addrPtr,
+		uint64_t addrLenPtr, uint32_t flags) {
+	auto file = self->fileContext()->getFile(fd);
+	if(!file)
+		co_return -EBADF;
+	auto result = co_await file->accept(self.get());
+	if(!result)
+		co_return -linuxErr(result.error());
+	auto newFile = result.value();
+	if(flags & SOCK_NONBLOCK)
+		co_await newFile->setFileFlags(
+			co_await newFile->getFileFlags() | O_NONBLOCK);
+	auto newFd = self->fileContext()->attachFile(newFile, flags & SOCK_CLOEXEC);
+	if(!newFd)
+		co_return -linuxErr(newFd.error());
+
+	if(addrPtr) {
+		std::byte addrBuf[128];
+		size_t written = co_await newFile->sockname(addrBuf, sizeof(addrBuf));
+		if(addrLenPtr) {
+			uint32_t cap = 0;
+			if(!co_await memRead(self->vmContext()->getSpace(), addrLenPtr,
+					sizeof(uint32_t), &cap))
+				co_return -EFAULT;
+			size_t out = std::min<size_t>(written, cap);
+			if(out && !co_await memWrite(self->vmContext()->getSpace(),
+					addrPtr, out, addrBuf))
+				co_return -EFAULT;
+			uint32_t real = written;
+			if(!co_await memWrite(self->vmContext()->getSpace(), addrLenPtr,
+					sizeof(uint32_t), &real))
+				co_return -EFAULT;
+		}
+	}
+	co_return newFd.value();
+}
+
+async::result<int64_t> linuxSendto(Process *self, int fd, uint64_t bufPtr,
+		size_t count, uint32_t flags, uint64_t addrPtr, uint64_t addrLen) {
+	auto file = self->fileContext()->getFile(fd);
+	if(!file)
+		co_return -EBADF;
+	count = std::min<size_t>(count, kLinuxIoMax);
+	auto bounce = std::make_unique<char[]>(count ? count : 1);
+	if(count && !co_await memRead(self->vmContext()->getSpace(), bufPtr,
+			count, bounce.get()))
+		co_return -EFAULT;
+	std::byte addrBuf[128];
+	if(addrLen > sizeof(addrBuf))
+		co_return -EINVAL;
+	if(addrLen && !co_await memRead(self->vmContext()->getSpace(), addrPtr,
+			addrLen, addrBuf))
+		co_return -EFAULT;
+
+	auto result = co_await file->sendMsg(self, flags, bounce.get(), count,
+			addrBuf, addrPtr ? addrLen : 0, {}, linuxCreds(self));
+	if(!result)
+		co_return -linuxFsErr(result.error());
+	co_return (int64_t)result.value();
+}
+
+async::result<int64_t> linuxRecvfrom(Process *self, int fd, uint64_t bufPtr,
+		size_t count, uint32_t flags, uint64_t addrPtr, uint64_t addrLenPtr) {
+	auto file = self->fileContext()->getFile(fd);
+	if(!file)
+		co_return -EBADF;
+	count = std::min<size_t>(count, kLinuxIoMax);
+	auto bounce = std::make_unique<char[]>(count ? count : 1);
+	std::byte addrBuf[128];
+	auto result = co_await file->recvMsg(self, flags, bounce.get(), count,
+			addrBuf, sizeof(addrBuf), 0);
+	if(std::holds_alternative<protocols::fs::Error>(result))
+		co_return -linuxFsErr(std::get<protocols::fs::Error>(result));
+	auto &data = std::get<protocols::fs::RecvData>(result);
+	if(data.dataLength && !co_await memWrite(self->vmContext()->getSpace(),
+			bufPtr, data.dataLength, bounce.get()))
+		co_return -EFAULT;
+	if(addrPtr && data.addressLength) {
+		uint32_t cap = 0;
+		if(addrLenPtr && !co_await memRead(self->vmContext()->getSpace(),
+				addrLenPtr, sizeof(uint32_t), &cap))
+			co_return -EFAULT;
+		size_t out = std::min<size_t>(data.addressLength, cap);
+		if(out && !co_await memWrite(self->vmContext()->getSpace(),
+				addrPtr, out, addrBuf))
+			co_return -EFAULT;
+		if(addrLenPtr) {
+			uint32_t real = data.addressLength;
+			if(!co_await memWrite(self->vmContext()->getSpace(), addrLenPtr,
+					sizeof(uint32_t), &real))
+				co_return -EFAULT;
+		}
+	}
+	co_return (int64_t)data.dataLength;
+}
+
+async::result<std::optional<std::vector<std::pair<uint64_t, size_t>>>>
+linuxReadIovecs(Process *self, uint64_t iovPtr, uint64_t iovLen) {
+	if(iovLen > 1024)
+		co_return std::nullopt;
+	std::vector<std::pair<uint64_t, size_t>> iovs;
+	size_t total = 0;
+	for(size_t i = 0; i < iovLen; i++) {
+		uint64_t ent[2];
+		if(!co_await memRead(self->vmContext()->getSpace(),
+				iovPtr + i * sizeof(ent), sizeof(ent), ent))
+			co_return std::nullopt;
+		total += ent[1];
+		if(total > kLinuxIoMax)
+			co_return std::nullopt;
+		iovs.push_back({ent[0], ent[1]});
+	}
+	co_return iovs;
+}
+
+async::result<int64_t> linuxSendmsg(Process *self, int fd, uint64_t msghdrPtr,
+		uint32_t flags) {
+	auto file = self->fileContext()->getFile(fd);
+	if(!file)
+		co_return -EBADF;
+	LinuxMsgHeader mh;
+	if(!co_await memRead(self->vmContext()->getSpace(), msghdrPtr,
+			sizeof(mh), &mh))
+		co_return -EFAULT;
+	if(mh.msgControl && mh.msgControlLen)
+		co_return -EINVAL; // v4: no cmsg support
+	auto iovs = co_await linuxReadIovecs(self, mh.msgIov, mh.msgIovLen);
+	if(!iovs)
+		co_return -EINVAL;
+	size_t total = 0;
+	for(auto &iov : *iovs)
+		total += iov.second;
+	auto bounce = std::make_unique<char[]>(total ? total : 1);
+	size_t off = 0;
+	for(auto &iov : *iovs) {
+		if(iov.second && !co_await memRead(self->vmContext()->getSpace(),
+				iov.first, iov.second, bounce.get() + off))
+			co_return -EFAULT;
+		off += iov.second;
+	}
+	std::byte addrBuf[128];
+	if(mh.msgNameLen > sizeof(addrBuf))
+		co_return -EINVAL;
+	if(mh.msgName && mh.msgNameLen && !co_await memRead(
+			self->vmContext()->getSpace(), mh.msgName, mh.msgNameLen, addrBuf))
+		co_return -EFAULT;
+
+	auto result = co_await file->sendMsg(self, flags, bounce.get(), total,
+			addrBuf, mh.msgName ? mh.msgNameLen : 0, {}, linuxCreds(self));
+	if(!result)
+		co_return -linuxFsErr(result.error());
+	co_return (int64_t)result.value();
+}
+
+async::result<int64_t> linuxRecvmsg(Process *self, int fd, uint64_t msghdrPtr,
+		uint32_t flags) {
+	auto file = self->fileContext()->getFile(fd);
+	if(!file)
+		co_return -EBADF;
+	LinuxMsgHeader mh;
+	if(!co_await memRead(self->vmContext()->getSpace(), msghdrPtr,
+			sizeof(mh), &mh))
+		co_return -EFAULT;
+	if(mh.msgControl && mh.msgControlLen)
+		co_return -EINVAL; // v4: no cmsg support
+	auto iovs = co_await linuxReadIovecs(self, mh.msgIov, mh.msgIovLen);
+	if(!iovs)
+		co_return -EINVAL;
+	size_t total = 0;
+	for(auto &iov : *iovs)
+		total += iov.second;
+	auto bounce = std::make_unique<char[]>(total ? total : 1);
+	std::byte addrBuf[128];
+	auto result = co_await file->recvMsg(self, flags, bounce.get(), total,
+			addrBuf, sizeof(addrBuf), 0);
+	if(std::holds_alternative<protocols::fs::Error>(result))
+		co_return -linuxFsErr(std::get<protocols::fs::Error>(result));
+	auto &data = std::get<protocols::fs::RecvData>(result);
+
+	// Split the bounce buffer back into the iovec chain.
+	size_t off = 0;
+	for(auto &iov : *iovs) {
+		size_t chunk = std::min(iov.second, total - off);
+		if(chunk && !co_await memWrite(self->vmContext()->getSpace(),
+				iov.first, chunk, bounce.get() + off))
+			co_return -EFAULT;
+		off += chunk;
+	}
+
+	LinuxMsgHeader out = mh;
+	out.msgNameLen = 0;
+	out.msgControlLen = 0;
+	out.msgFlags = (int32_t)data.flags;
+	if(mh.msgName && data.addressLength) {
+		out.msgNameLen = std::min<uint32_t>((uint32_t)data.addressLength,
+				mh.msgNameLen);
+		if(out.msgNameLen && !co_await memWrite(self->vmContext()->getSpace(),
+				mh.msgName, out.msgNameLen, addrBuf))
+			co_return -EFAULT;
+	}
+	if(!co_await memWrite(self->vmContext()->getSpace(), msghdrPtr,
+			sizeof(out), &out))
+		co_return -EFAULT;
+	co_return (int64_t)data.dataLength;
+}
+
+async::result<int64_t> linuxShutdown(Process *self, int fd, int how) {
+	auto file = self->fileContext()->getFile(fd);
+	if(!file)
+		co_return -EBADF;
+	if(how < 0 || how > 2)
+		co_return -EINVAL;
+	auto e = co_await file->shutdown(how);
+	co_return e == protocols::fs::Error::none ? 0 : -linuxFsErr(e);
+}
+
+async::result<int64_t> linuxSocknameGet(Process *self, int fd,
+		uint64_t addrPtr, uint64_t addrLenPtr, bool peer) {
+	auto file = self->fileContext()->getFile(fd);
+	if(!file)
+		co_return -EBADF;
+	std::byte addrBuf[128];
+	uint32_t cap = sizeof(addrBuf);
+	if(addrLenPtr && !co_await memRead(self->vmContext()->getSpace(),
+			addrLenPtr, sizeof(uint32_t), &cap))
+		co_return -EFAULT;
+	cap = std::min<uint32_t>(cap, sizeof(addrBuf));
+
+	size_t written = 0;
+	if(peer) {
+		auto result = co_await file->peername(addrBuf, cap);
+		if(!result)
+			co_return -linuxFsErr(result.error());
+		written = result.value();
+	}else{
+		written = co_await file->sockname(addrBuf, cap);
+	}
+
+	if(addrPtr && written && !co_await memWrite(self->vmContext()->getSpace(),
+			addrPtr, written, addrBuf))
+		co_return -EFAULT;
+	uint32_t real = written;
+	if(addrLenPtr && !co_await memWrite(self->vmContext()->getSpace(),
+			addrLenPtr, sizeof(uint32_t), &real))
+		co_return -EFAULT;
+	co_return 0;
+}
+
+async::result<int64_t> linuxSetsockopt(Process *self, int fd, int layer,
+		int number, uint64_t optPtr, uint64_t optLen) {
+	auto file = self->fileContext()->getFile(fd);
+	if(!file)
+		co_return -EBADF;
+	if(optLen > 4096)
+		co_return -EINVAL;
+	std::vector<char> optbuf(optLen);
+	if(optLen && !co_await memRead(self->vmContext()->getSpace(), optPtr,
+			optLen, optbuf.data()))
+		co_return -EFAULT;
+	auto e = co_await file->setSocketOption(layer, number, std::move(optbuf));
+	co_return e ? 0 : -linuxFsErr(e.error());
+}
+
+async::result<int64_t> linuxGetsockopt(Process *self, int fd, int layer,
+		int number, uint64_t optPtr, uint64_t optLenPtr) {
+	auto file = self->fileContext()->getFile(fd);
+	if(!file)
+		co_return -EBADF;
+	uint32_t optLen = 0;
+	if(optLenPtr && !co_await memRead(self->vmContext()->getSpace(),
+			optLenPtr, sizeof(uint32_t), &optLen))
+		co_return -EFAULT;
+	if(optLen > 4096)
+		co_return -EINVAL;
+	std::vector<char> optbuf(optLen);
+	auto e = co_await file->getSocketOption(self, layer, number, optbuf);
+	if(!e)
+		co_return -linuxFsErr(e.error());
+	size_t out = std::min<size_t>(optbuf.size(), optLen);
+	if(optPtr && out && !co_await memWrite(self->vmContext()->getSpace(),
+			optPtr, out, optbuf.data()))
+		co_return -EFAULT;
+	uint32_t real = optbuf.size();
+	if(optLenPtr && !co_await memWrite(self->vmContext()->getSpace(),
+			optLenPtr, sizeof(uint32_t), &real))
+		co_return -EFAULT;
+	co_return 0;
+}
+
+// --------------------------------------------------------------- signals
+
+uint32_t linuxFlagsFromHandler(const SignalHandler &h) {
+	uint32_t out = 0;
+	if(h.flags & signalInfo)
+		out |= kLinuxSaSiginfo;
+	if(h.flags & signalOnce)
+		out |= kLinuxSaResethand;
+	if(h.flags & signalReentrant)
+		out |= kLinuxSaNodefer;
+	if(h.flags & signalOnStack)
+		out |= kLinuxSaOnstack;
+	if(h.restorerIp)
+		out |= kLinuxSaRestorer;
+	return out;
+}
+
+SignalHandler linuxHandlerFromUser(uint64_t handler, uint64_t flags,
+		uint64_t restorer, uint64_t mask) {
+	SignalHandler h{};
+	if(handler == 0)
+		h.disposition = SignalDisposition::none;
+	else if(handler == 1)
+		h.disposition = SignalDisposition::ignore;
+	else
+		h.disposition = SignalDisposition::handle;
+	h.handlerIp = handler;
+	h.restorerIp = (flags & kLinuxSaRestorer) ? restorer : 0;
+	uint32_t mflags = 0;
+	if(flags & kLinuxSaSiginfo)
+		mflags |= signalInfo;
+	if(flags & kLinuxSaResethand)
+		mflags |= signalOnce;
+	if(flags & kLinuxSaNodefer)
+		mflags |= signalReentrant;
+	if(flags & kLinuxSaOnstack)
+		mflags |= signalOnStack;
+	h.flags = mflags;
+	h.mask = mask & ~kLinuxUnblockableSet;
+	return h;
+}
+
+async::result<int64_t> linuxRtSigaction(Process *self, int signo,
+		uint64_t actPtr, uint64_t oldPtr, uint64_t sigsetsize) {
+	if(signo <= 0 || signo > 64 || sigsetsize != 8)
+		co_return -EINVAL;
+	auto ctx = self->threadGroup()->signalContext();
+	if(actPtr) {
+		if(signo == SIGKILL || signo == SIGSTOP)
+			co_return -EINVAL;
+		uint64_t raw[4];
+		if(!co_await memRead(self->vmContext()->getSpace(), actPtr,
+				sizeof(raw), raw))
+			co_return -EFAULT;
+		auto handler = linuxHandlerFromUser(raw[0], raw[1], raw[2], raw[3]);
+		auto old = ctx->changeHandler(signo, handler);
+		if(oldPtr) {
+			uint64_t outraw[4] = {
+				old.handlerIp, linuxFlagsFromHandler(old),
+				old.restorerIp, old.mask
+			};
+			if(!co_await memWrite(self->vmContext()->getSpace(), oldPtr,
+					sizeof(outraw), outraw))
+				co_return -EFAULT;
+		}
+	}else if(oldPtr) {
+		auto old = ctx->getHandler(signo);
+		uint64_t outraw[4] = {
+			old.handlerIp, linuxFlagsFromHandler(old),
+			old.restorerIp, old.mask
+		};
+		if(!co_await memWrite(self->vmContext()->getSpace(), oldPtr,
+				sizeof(outraw), outraw))
+			co_return -EFAULT;
+	}
+	co_return 0;
+}
+
+async::result<int64_t> linuxRtSigprocmask(Process *self, int how,
+		uint64_t setPtr, uint64_t oldPtr, uint64_t sigsetsize) {
+	if(sigsetsize != 8)
+		co_return -EINVAL;
+	uint64_t former = self->signalMask();
+	if(setPtr) {
+		uint64_t mask;
+		if(!co_await memRead(self->vmContext()->getSpace(), setPtr,
+				sizeof(mask), &mask))
+			co_return -EFAULT;
+		uint64_t updated;
+		if(how == kLinuxSigBlock)
+			updated = former | mask;
+		else if(how == kLinuxSigUnblock)
+			updated = former & ~mask;
+		else if(how == kLinuxSigSetmask)
+			updated = mask;
+		else
+			co_return -EINVAL;
+		self->setSignalMask(updated & ~kLinuxUnblockableSet);
+	}
+	if(oldPtr && !co_await memWrite(self->vmContext()->getSpace(), oldPtr,
+			sizeof(uint64_t), &former))
+		co_return -EFAULT;
+	co_return 0;
+}
+
+async::result<int64_t> linuxKill(Process *self, int64_t pid, int64_t sig) {
+	if(sig < 0 || sig > 64)
+		co_return -EINVAL;
+	UserSignal info{};
+	info.pid = self->pid();
+	info.uid = self->threadGroup()->uid();
+	if(pid > 0) {
+		auto tg = ThreadGroup::findThreadGroup(pid);
+		if(!tg)
+			co_return -ESRCH;
+		if(sig)
+			tg->issueThreadGroupSignal(sig, info);
+	}else if(pid == 0) {
+		auto pg = self->pgPointer();
+		if(!pg)
+			co_return -ESRCH;
+		if(sig)
+			pg->issueSignalToGroup(sig, info);
+	}else if(pid == -1) {
+		co_return -EPERM;
+	}else{
+		auto pg = ProcessGroup::findProcessGroup(-pid);
+		if(!pg)
+			co_return -ESRCH;
+		if(sig)
+			pg->issueSignalToGroup(sig, info);
+	}
+	co_return 0;
+}
+
+async::result<int64_t> linuxTgkill(Process *self, int64_t tgid, int64_t tid,
+		int64_t sig) {
+	if(sig < 0 || sig > 64)
+		co_return -EINVAL;
+	auto tg = ThreadGroup::findThreadGroup(tgid);
+	if(!tg)
+		co_return -ESRCH;
+	auto target = tg->findThread(tid);
+	if(!target)
+		co_return -ESRCH;
+	if(sig) {
+		UserSignal info{};
+		info.pid = self->pid();
+		info.uid = self->threadGroup()->uid();
+		target->issueThreadSignal(sig, info);
+	}
+	co_return 0;
+}
+
 } // anonymous namespace
 
+// Signal delivery for Linux-personality threads: save the register image and
+// the kernel SIMD blob into an rt_sigframe on the user stack, then enter the
+// handler with the Linux calling convention. The SA_RESTORER trampoline
+// (mandatory on x86_64) issues rt_sigreturn, which restores the frame.
+async::result<void> raiseLinuxContext(SignalItem *item, Process *process,
+		SignalContext::SignalHandling handling) {
+#if defined(__x86_64__)
+	auto thread = process->threadDescriptor();
+	uintptr_t sigregs[19];
+	HEL_CHECK(helLoadRegisters(thread.getHandle(), kHelRegsSignal, &sigregs));
+
+	uint64_t newMask = process->signalMask() | handling.handler.mask;
+	if(!(handling.handler.flags & signalReentrant))
+		newMask |= UINT64_C(1) << (item->signalNumber - 1);
+	process->setSignalMask(newMask);
+
+	auto simdSize = linuxSimdStateSize();
+	std::vector<std::byte> simd(simdSize);
+	HEL_CHECK(helLoadRegisters(thread.getHandle(), kHelRegsSimd, simd.data()));
+
+	size_t total = kLinuxSigframeFpOff + simdSize;
+	uintptr_t nsp = sigregs[15] - 128; // red zone
+	uintptr_t frame = ((nsp - total) & ~uintptr_t(15)) - 8;
+
+	std::vector<std::byte> image(total);
+	memset(image.data(), 0, total);
+	uint64_t pretcode = handling.handler.restorerIp;
+	memcpy(image.data(), &pretcode, sizeof(pretcode));
+	if(handling.handler.flags & signalInfo) {
+		siginfo_t si;
+		memset(&si, 0, sizeof(si));
+		si.si_signo = item->signalNumber;
+		std::visit(CompileSignalInfo{&si}, item->info);
+		memcpy(image.data() + kLinuxSigframeInfoOff, &si,
+				std::min(sizeof(si), size_t(128)));
+	}
+	LinuxUcontext uc;
+	memset(&uc, 0, sizeof(uc));
+	for(int i = 0; i < 19; i++)
+		uc.ucMcontext.gregs[i] = sigregs[i];
+	uc.ucMcontext.fpregs = frame + kLinuxSigframeFpOff;
+	uc.ucSigmask = newMask;
+	memcpy(image.data() + kLinuxSigframeUcOff, &uc, sizeof(uc));
+	memcpy(image.data() + kLinuxSigframeFpOff, simd.data(), simdSize);
+
+	auto storeFrame = co_await helix_ng::writeMemory(thread, frame, total,
+			image.data());
+	HEL_CHECK(storeFrame.error());
+
+	sigregs[8] = item->signalNumber; // rdi = signo
+	sigregs[9] = frame + kLinuxSigframeInfoOff; // rsi = siginfo
+	sigregs[12] = frame + kLinuxSigframeUcOff; // rdx = ucontext
+	sigregs[13] = 0; // rax
+	sigregs[15] = frame;
+	sigregs[16] = handling.handler.handlerIp;
+	HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsSignal, &sigregs));
+#else
+	(void)item;
+	(void)process;
+	(void)handling;
+#endif
+	delete item;
+	co_return;
+}
+
+// rt_sigreturn has no return value: the register image (including RAX) is
+// restored from the frame, so the caller must only resume the thread.
+async::result<LinuxSyscallOutcome> linuxRtSigreturn(
+		helix::BorrowedDescriptor thread, Process *self) {
+#if defined(__x86_64__)
+	uintptr_t sigregs[19];
+	HEL_CHECK(helLoadRegisters(thread.getHandle(), kHelRegsSignal, &sigregs));
+	uintptr_t ucAddr = sigregs[15] + kLinuxSigreturnUcDelta;
+
+	LinuxUcontext uc;
+	auto load = co_await helix_ng::readMemory(thread, ucAddr, sizeof(uc), &uc);
+	if(load.error() != kHelErrNone) {
+		std::cout << "posix: linux-abi: rt_sigreturn with bad frame" << std::endl;
+		co_await self->terminate();
+		co_await self->threadGroup()->terminateGroup(TerminationBySignal{SIGILL});
+		co_return LinuxSyscallOutcome{false, 0, false};
+	}
+
+	self->setSignalMask(uc.ucSigmask & ~kLinuxUnblockableSet);
+
+	if(uc.ucMcontext.fpregs) {
+		auto simdSize = linuxSimdStateSize();
+		std::vector<std::byte> simd(simdSize);
+		auto loadSimd = co_await helix_ng::readMemory(thread,
+				(uintptr_t)uc.ucMcontext.fpregs, simdSize, simd.data());
+		if(loadSimd.error() == kHelErrNone)
+			HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsSimd,
+					simd.data()));
+	}
+
+	for(int i = 0; i < 19; i++)
+		sigregs[i] = uc.ucMcontext.gregs[i];
+	HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsSignal, &sigregs));
+
+	co_return LinuxSyscallOutcome{false, 0, true};
+#else
+	(void)thread;
+	(void)self;
+	co_return LinuxSyscallOutcome{true, -ENOSYS};
+#endif
+}
+async::result<LinuxSyscallOutcome> linuxRtSigreturn(
+		helix::BorrowedDescriptor thread, Process *self);
 async::result<LinuxSyscallOutcome> handleLinuxSyscall(std::shared_ptr<Process> self,
 		helix::BorrowedDescriptor thread, uint64_t nr,
 		const std::array<uint64_t, 6> &args) {
@@ -992,6 +1781,7 @@ async::result<LinuxSyscallOutcome> handleLinuxSyscall(std::shared_ptr<Process> s
 	uint64_t a2 = args[2];
 	uint64_t a3 = args[3];
 	uint64_t a4 = args[4];
+	uint64_t a5 = args[5];
 
 	int64_t ret = 0;
 	switch(nr) {
@@ -1129,6 +1919,72 @@ async::result<LinuxSyscallOutcome> handleLinuxSyscall(std::shared_ptr<Process> s
 	case kLinuxNrWait4:
 		ret = co_await linuxWait4(self.get(), (int)(int64_t)a0, a1, a2);
 		break;
+	case kLinuxNrSocket:
+		ret = co_await linuxSocket(self.get(), a0, a1, a2);
+		break;
+	case kLinuxNrSocketpair:
+		ret = co_await linuxSocketpair(self.get(), a0, a1, a2, a3);
+		break;
+	case kLinuxNrBind:
+		ret = co_await linuxBind(self.get(), (int)a0, a1, a2);
+		break;
+	case kLinuxNrConnect:
+		ret = co_await linuxConnect(self.get(), (int)a0, a1, a2);
+		break;
+	case kLinuxNrListen:
+		ret = co_await linuxListen(self.get(), (int)a0, (int)a1);
+		break;
+	case kLinuxNrAccept:
+	case kLinuxNrAccept4:
+		ret = co_await linuxAccept(self, (int)a0, a1, a2,
+				nr == kLinuxNrAccept4 ? (uint32_t)a3 : 0);
+		break;
+	case kLinuxNrSendto:
+		ret = co_await linuxSendto(self.get(), (int)a0, a1, a2,
+				(uint32_t)a3, a4, a5);
+		break;
+	case kLinuxNrRecvfrom:
+		ret = co_await linuxRecvfrom(self.get(), (int)a0, a1, a2,
+				(uint32_t)a3, a4, a5);
+		break;
+	case kLinuxNrSendmsg:
+		ret = co_await linuxSendmsg(self.get(), (int)a0, a1, (uint32_t)a2);
+		break;
+	case kLinuxNrRecvmsg:
+		ret = co_await linuxRecvmsg(self.get(), (int)a0, a1, (uint32_t)a2);
+		break;
+	case kLinuxNrShutdown:
+		ret = co_await linuxShutdown(self.get(), (int)a0, (int)a1);
+		break;
+	case kLinuxNrGetsockname:
+		ret = co_await linuxSocknameGet(self.get(), (int)a0, a1, a2, false);
+		break;
+	case kLinuxNrGetpeername:
+		ret = co_await linuxSocknameGet(self.get(), (int)a0, a1, a2, true);
+		break;
+	case kLinuxNrSetsockopt:
+		ret = co_await linuxSetsockopt(self.get(), (int)a0, (int)a1, (int)a2,
+				a3, a4);
+		break;
+	case kLinuxNrGetsockopt:
+		ret = co_await linuxGetsockopt(self.get(), (int)a0, (int)a1, (int)a2,
+				a3, a4);
+		break;
+	case kLinuxNrKill:
+		ret = co_await linuxKill(self.get(), (int64_t)a0, (int64_t)a1);
+		break;
+	case kLinuxNrTgkill:
+		ret = co_await linuxTgkill(self.get(), (int64_t)a0, (int64_t)a1,
+				(int64_t)a2);
+		break;
+	case kLinuxNrRtSigaction:
+		ret = co_await linuxRtSigaction(self.get(), (int)a0, a1, a2, a3);
+		break;
+	case kLinuxNrRtSigprocmask:
+		ret = co_await linuxRtSigprocmask(self.get(), (int)a0, a1, a2, a3);
+		break;
+	case kLinuxNrRtSigreturn:
+		co_return co_await linuxRtSigreturn(thread, self.get());
 	default:
 		std::cout << "posix: linux-abi: unhandled syscall " << nr << std::endl;
 		co_return LinuxSyscallOutcome{true, -ENOSYS};

@@ -138,3 +138,39 @@ DEFINE_TEST(linux_abi_dirstat, ([] {
 
         assert(!unlink(path));
 }));
+
+\
+extern "C" const unsigned char nomilia_linux_socksig_blob[];
+extern "C" const unsigned long nomilia_linux_socksig_size;
+
+// Nomilia: socketpair roundtrip and rt_sigaction/rt_sigprocmask with a
+// handler delivered through the Linux rt_sigframe path.
+DEFINE_TEST(linux_abi_socksig, ([] {
+        const char *path = "/tmp/nomilia-linux-socksig";
+
+        int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0777);
+        assert(fd >= 0);
+        ssize_t n = write(fd, nomilia_linux_socksig_blob, nomilia_linux_socksig_size);
+        assert(n == (ssize_t)nomilia_linux_socksig_size);
+        assert(!close(fd));
+        assert(!chmod(path, 0755));
+
+        pid_t pid = fork();
+        assert(pid >= 0);
+        if(!pid) {
+                char *argv[] = { const_cast<char *>(path), nullptr };
+                char *envp[] = { nullptr };
+                execve(path, argv, envp);
+                _exit(127); // execve() failed.
+        }
+
+        int status = 0;
+        pid_t w = waitpid(pid, &status, 0);
+        assert(w == pid);
+        assert(WIFEXITED(status));
+        printf("posix-tests: linux_abi_socksig child exit = %d\n", WEXITSTATUS(status));
+        assert(WEXITSTATUS(status) == 47);
+
+        assert(!unlink(path));
+}));
+
