@@ -283,15 +283,17 @@ jobs:
                 # may re-sync the sysroot), then re-run the image update so the
                 # rsync picks the files up. /lib is a symlink to usr/lib, so
                 # ld-musl lands at its PT_INTERP path.
-                mkdir -p sysroot/usr/bin sysroot/usr/lib
+                # xbstrap's sysroot is build/system-root (NOT build/sysroot);
+                # remake-image populates the ext2 straight from that directory.
+                mkdir -p system-root/usr/bin system-root/usr/lib
                 cp ../payload/sysroot/bin/busybox ../payload/sysroot/bin/busybox-dynamic \
                         ../payload/sysroot/bin/hello-dynamic ../payload/sysroot/bin/hello-static \
-                        sysroot/usr/bin/
-                cp ../payload/sysroot/lib/ld-musl-x86_64.so.1 sysroot/usr/lib/
-                ln -sf ld-musl-x86_64.so.1 sysroot/usr/lib/libc.musl-x86_64.so.1
-                ls -la sysroot/usr/bin/busybox sysroot/usr/lib/ld-musl-x86_64.so.1
+                        system-root/usr/bin/
+                cp ../payload/sysroot/lib/ld-musl-x86_64.so.1 system-root/usr/lib/
+                ln -sf ld-musl-x86_64.so.1 system-root/usr/lib/libc.musl-x86_64.so.1
+                ls -la system-root/usr/bin/busybox system-root/usr/lib/ld-musl-x86_64.so.1
                 xbstrap run remake-image
-                ls sysroot/usr/bin/busybox sysroot/usr/bin/hello-dynamic
+                ls system-root/usr/bin/busybox system-root/usr/bin/hello-dynamic
             env:
                 XBPS_ARCH: x86_64
           - name: Run boot and test suites in QEMU
