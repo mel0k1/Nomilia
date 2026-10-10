@@ -222,7 +222,7 @@ DEFINE_TEST(linux_abi_dyn, ([] {
 
 // Nomilia: real Linux payloads (built by ci/payloads/build-musl-busybox.sh and
 // delivered into the image) must run through the linux-abi layer: static
-// busybox directly, dynamic binaries through the ld-musl PT_INTERP path.
+// binaries directly, dynamic binaries through the ld-musl PT_INTERP path.
 DEFINE_TEST(linux_abi_payloads, ([] {
         auto spawn = [](const char *path, char *argv[]) -> int {
                 pid_t pid = fork();
@@ -230,6 +230,8 @@ DEFINE_TEST(linux_abi_payloads, ([] {
                 if(!pid) {
                         char *envp[] = { nullptr };
                         execve(path, argv, envp);
+                        fprintf(stderr, "posix-tests: execve(%s) failed: %s\n",
+                                        path, strerror(errno));
                         _exit(127); // execve() failed.
                 }
 
@@ -244,30 +246,51 @@ DEFINE_TEST(linux_abi_payloads, ([] {
                 return WEXITSTATUS(status);
         };
 
+        // Delivery diagnostics: the payloads must be present in the image.
+        for(const char *p : {"/usr/bin/busybox", "/usr/bin/busybox-dynamic",
+                        "/usr/bin/hello-dynamic", "/usr/bin/hello-static",
+                        "/lib/ld-musl-x86_64.so.1"}) {
+                struct stat st;
+                if(!stat(p, &st))
+                        printf("posix-tests: linux_abi_payloads: %s mode 0%o size %zu\n",
+                                        p, (unsigned)st.st_mode, (size_t)st.st_size);
+                else
+                        printf("posix-tests: linux_abi_payloads: %s MISSING (errno %d)\n",
+                                        p, errno);
+        }
+
+        int rStaticBusybox = -2, rHelloStatic = -2, rHelloDyn = -2, rBusyboxDyn = -2;
         {
-                char argv0[] = "busybox";
-                char argv1[] = "sh";
-                char argv2[] = "-c";
-                char argv3[] = "echo nomilia-busybox-static";
-                char *argv[] = { argv0, argv1, argv2, argv3, nullptr };
-                int r = spawn("/usr/bin/busybox", argv);
-                printf("posix-tests: linux_abi_payloads: static busybox exit = %d\n", r);
-                assert(r == 0);
+                char a0[] = "busybox";
+                char a1[] = "sh";
+                char a2[] = "-c";
+                char a3[] = "echo nomilia-busybox-static";
+                char *argv[] = { a0, a1, a2, a3, nullptr };
+                rStaticBusybox = spawn("/usr/bin/busybox", argv);
         }
         {
-                char argv0[] = "hello-dynamic";
-                char *argv[] = { argv0, nullptr };
-                int r = spawn("/usr/bin/hello-dynamic", argv);
-                printf("posix-tests: linux_abi_payloads: hello-dynamic exit = %d\n", r);
-                assert(r == 0);
+                char a0[] = "hello-static";
+                char *argv[] = { a0, nullptr };
+                rHelloStatic = spawn("/usr/bin/hello-static", argv);
         }
         {
-                char argv0[] = "busybox-dynamic";
-                char argv1[] = "echo";
-                char argv2[] = "nomilia-busybox-dynamic";
-                char *argv[] = { argv0, argv1, argv2, nullptr };
-                int r = spawn("/usr/bin/busybox-dynamic", argv);
-                printf("posix-tests: linux_abi_payloads: busybox-dynamic exit = %d\n", r);
-                assert(r == 0);
+                char a0[] = "hello-dynamic";
+                char *argv[] = { a0, nullptr };
+                rHelloDyn = spawn("/usr/bin/hello-dynamic", argv);
         }
+        {
+                char a0[] = "busybox-dynamic";
+                char a1[] = "echo";
+                char a2[] = "nomilia-busybox-dynamic";
+                char *argv[] = { a0, a1, a2, nullptr };
+                rBusyboxDyn = spawn("/usr/bin/busybox-dynamic", argv);
+        }
+
+        printf("posix-tests: linux_abi_payloads: results:"
+                        " static-busybox=%d hello-static=%d hello-dynamic=%d"
+                        " busybox-dynamic=%d\n",
+                        rStaticBusybox, rHelloStatic, rHelloDyn, rBusyboxDyn);
+        assert(rStaticBusybox == 0);
+        assert(rHelloDyn == 0);
+        assert(rBusyboxDyn == 0);
 }));

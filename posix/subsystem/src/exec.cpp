@@ -189,9 +189,11 @@ loadElfImage(SharedFilePtr file, VmContext *vmContext, uintptr_t base) {
 					info.interpreter.data(), phdr->p_filesz));
 			if(size_t n = info.interpreter.find('\0'); n != size_t(-1))
 				info.interpreter.resize(n);
-			// Nomilia: Linux loaders use ld-linux-* / ld-musl-* interpreters.
-			if(!info.interpreter.compare(0, 9, "ld-linux-")
-					|| !info.interpreter.compare(0, 8, "ld-musl-"))
+			// Nomilia: Linux loaders are identified by their basename anywhere in
+			// the interp string (real binaries carry absolute paths like
+			// /lib/ld-musl-x86_64.so.1 or /lib64/ld-linux-x86-64.so.2).
+			if(info.interpreter.find("ld-linux-") != std::string::npos
+					|| info.interpreter.find("ld-musl-") != std::string::npos)
 				info.isLinux = true;
 		}else if(phdr->p_type == PT_DYNAMIC || phdr->p_type == PT_TLS
 				|| phdr->p_type == PT_GNU_EH_FRAME || phdr->p_type == PT_GNU_STACK
@@ -231,6 +233,13 @@ loadElfImage(SharedFilePtr file, VmContext *vmContext, uintptr_t base) {
 			std::cout << "posix: Unexpected PHDR type " << phdr->p_type << std::endl;
 		}
 	}
+
+	// Nomilia: a static ELF (no interpreter) defaults to the Linux ABI.
+	// Plain musl-static binaries carry no .note.ABI-tag to detect them by,
+	// and the managarm userland is dynamically linked, so nothing else
+	// produces interpreter-less ELFs here.
+	if(info.interpreter.empty())
+		info.isLinux = true;
 
 	co_return info;
 }
