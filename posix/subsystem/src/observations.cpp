@@ -721,6 +721,11 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 				// Linux returns the result (or -errno) in RAX.
 				gprs[kHelRegArg2] = static_cast<uint64_t>(outcome.value);
 				HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
+				// Signals raised during the upcall (kill to self, SIGPIPE) are
+				// processed here: serveSignals cannot interrupt a thread that is
+				// parked for resume.
+				if(!co_await handlePendingSignalsFromObservation(self.get()))
+					break;
 				HEL_CHECK(helResume(thread.getHandle()));
 			}else if(outcome.committed) {
 				// rt_sigreturn already restored the full register image.
