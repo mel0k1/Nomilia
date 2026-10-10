@@ -23,6 +23,3 @@ struct LinuxSyscallOutcome {
 async::result<LinuxSyscallOutcome> handleLinuxSyscall(std::shared_ptr<Process> self,
 		helix::BorrowedDescriptor thread, uint64_t nr,
 		const std::array<uint64_t, 6> &args);
-
-// Nomilia: temporary CI diagnostics - writes one byte to the child's stdout.
-async::result<void> linuxDiagMark(Process *self, char c);

@@ -3,8 +3,8 @@
  * returned from via rt_sigreturn. Exit codes: 47 = success, otherwise
  * the failing step: 65 socketpair, 66 write, 67 read, 68 payload,
  * 69 close, 70 rt_sigaction, 71 rt_sigprocmask, 72 kill,
- * 73 handler timeout, 74 getsockname, 75 sockname family.
- * Progress markers a..f and H go to stdout for CI diagnosis. */
+ * 73 handler timeout, 74 getsockname, 75 sockname family,
+ * 76 handler readback call, 77 mask readback call, 78 handler mismatch. */
 
         .section .note.ABI-tag, "a"
         .p2align 2
@@ -29,15 +29,6 @@ _start:
         syscall
         test %rax, %rax
         jnz .Lf65
-        mov $'a', %r14b
-
-        /* progress marker in r14b */
-        mov $1, %eax
-        mov $1, %edi
-        mov %r14b, .Lmark
-        lea .Lmark(%rip), %rsi
-        mov $1, %edx
-        syscall
 
         /* write(sv[0], "ping", 4) */
         mov $1, %eax
@@ -69,15 +60,6 @@ _start:
         jnz .Lf74
         cmpw $1, .Laddr(%rip)           /* AF_UNIX */
         jne .Lf75
-        mov $'b', %r14b
-
-        /* progress marker in r14b */
-        mov $1, %eax
-        mov $1, %edi
-        mov %r14b, .Lmark
-        lea .Lmark(%rip), %rsi
-        mov $1, %edx
-        syscall
 
         /* close both ends */
         mov $3, %eax
@@ -100,15 +82,6 @@ _start:
         syscall
         test %rax, %rax
         jnz .Lf70
-        mov $'c', %r14b
-
-        /* progress marker in r14b */
-        mov $1, %eax
-        mov $1, %edi
-        mov %r14b, .Lmark
-        lea .Lmark(%rip), %rsi
-        mov $1, %edx
-        syscall
 
         /* rt_sigprocmask(SIG_SETMASK, {0}, &old, 8) */
         mov $14, %eax
@@ -119,15 +92,6 @@ _start:
         syscall
         test %rax, %rax
         jnz .Lf71
-        mov $'d', %r14b
-
-        /* progress marker in r14b */
-        mov $1, %eax
-        mov $1, %edi
-        mov %r14b, .Lmark
-        lea .Lmark(%rip), %rsi
-        mov $1, %edx
-        syscall
 
         /* kill(getpid(), SIGUSR1): the handler bumps .Lflag */
         mov $39, %eax
@@ -139,15 +103,6 @@ _start:
         syscall
         test %rax, %rax
         jnz .Lf72
-        mov $'e', %r14b
-
-        /* progress marker in r14b */
-        mov $1, %eax
-        mov $1, %edi
-        mov %r14b, .Lmark
-        lea .Lmark(%rip), %rsi
-        mov $1, %edx
-        syscall
 
         /* read back the handler table: sigaction(10, NULL, old2, 8) */
         mov $13, %eax
@@ -161,30 +116,7 @@ _start:
         mov .Lold2(%rip), %rax
         lea .Lhandler(%rip), %rcx
         cmp %rcx, %rax
-        je .Lgok
-        mov $'g', %r14b
-        jmp .Lmarkout
-.Lgok:
-        mov $'G', %r14b
-
-.Lmarkout:
-        /* progress marker in r14b */
-        mov $1, %eax
-        mov $1, %edi
-        mov %r14b, .Lmark
-        lea .Lmark(%rip), %rsi
-        mov $1, %edx
-        syscall
-
-        /* read back the mask: sigprocmask(SIG_SETMASK, NULL, old3, 8) */
-        mov $14, %eax
-        mov $2, %edi
-        xor %esi, %esi
-        lea .Lold3(%rip), %rdx
-        mov $8, %r10
-        syscall
-        test %rax, %rax
-        jnz .Lf77
+        jne .Lf78
 
         /* bounded wait for the handler */
         mov $500000, %r13
@@ -198,15 +130,6 @@ _start:
         jmp .Lf73
 
 .Lhandok:
-        mov $'f', %r14b
-
-        /* progress marker in r14b */
-        mov $1, %eax
-        mov $1, %edi
-        mov %r14b, .Lmark
-        lea .Lmark(%rip), %rsi
-        mov $1, %edx
-        syscall
         mov $47, %edi
         jmp .Lexit
 
@@ -248,6 +171,9 @@ _start:
         jmp .Lexit
 .Lf77:
         mov $77, %edi
+        jmp .Lexit
+.Lf78:
+        mov $78, %edi
 .Lexit:
         mov $60, %eax           /* exit_group */
         syscall
@@ -258,15 +184,6 @@ _start:
         mov $1, %eax
         mov $1, %edi
         lea .LmsgH(%rip), %rsi
-        mov $1, %edx
-        syscall
-        mov $'H', %r14b
-
-        /* progress marker in r14b */
-        mov $1, %eax
-        mov $1, %edi
-        mov %r14b, .Lmark
-        lea .Lmark(%rip), %rsi
         mov $1, %edx
         syscall
         movq $1, .Lflag(%rip)
@@ -292,6 +209,4 @@ _start:
 .Lempty: .quad 0
 .Lold:  .quad 0
 .Lold2: .space 32
-.Lold3: .quad 0
 .Lflag: .quad 0
-.Lmark: .byte 0

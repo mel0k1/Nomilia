@@ -807,7 +807,6 @@ async::result<int64_t> linuxWait4(Process *self, int pid, uintptr_t statusPtr,
 	co_return (int64_t)outcome.value().pid;
 }
 
-
 // Resolves a path relative to dirfd and returns the node stats plus the
 // VFS node type (-errno on error).
 async::result<std::expected<std::pair<FileStats, VfsType>, int64_t>> statsAt(
@@ -1565,7 +1564,6 @@ async::result<int64_t> linuxRtSigaction(Process *self, int signo,
 			co_return -EFAULT;
 		auto handler = linuxHandlerFromUser(raw[0], raw[1], raw[2], raw[3]);
 		auto old = ctx->changeHandler(signo, handler);
-		co_await linuxDiagMark(self, 'X');
 		if(oldPtr) {
 			uint64_t outraw[4] = {
 				old.handlerIp, linuxFlagsFromHandler(old),
@@ -1627,7 +1625,6 @@ async::result<int64_t> linuxKill(Process *self, int64_t pid, int64_t sig) {
 			co_return -ESRCH;
 		if(sig)
 			tg->issueThreadGroupSignal(sig, info);
-		co_await linuxDiagMark(self, 'K');
 	}else if(pid == 0) {
 		auto pg = self->pgPointer();
 		if(!pg)
@@ -1667,14 +1664,6 @@ async::result<int64_t> linuxTgkill(Process *self, int64_t tgid, int64_t tid,
 
 } // anonymous namespace
 
-// Nomilia: temporary CI diagnostics - writes one byte to the child's stdout.
-async::result<void> linuxDiagMark(Process *self, char c) {
-	auto file = self->fileContext()->getFile(1);
-	if(!file)
-		co_return;
-	co_await file->writeAll(self, &c, 1);
-}
-
 // Signal delivery for Linux-personality threads: save the register image and
 // the kernel SIMD blob into an rt_sigframe on the user stack, then enter the
 // handler with the Linux calling convention. The SA_RESTORER trampoline
@@ -1683,7 +1672,6 @@ async::result<void> raiseLinuxContext(SignalItem *item, Process *process,
 		SignalContext::SignalHandling handling) {
 #if defined(__x86_64__)
 	auto thread = process->threadDescriptor();
-	co_await linuxDiagMark(process, 'r');
 	uintptr_t sigregs[19];
 	HEL_CHECK(helLoadRegisters(thread.getHandle(), kHelRegsSignal, &sigregs));
 
@@ -1732,7 +1720,6 @@ async::result<void> raiseLinuxContext(SignalItem *item, Process *process,
 	sigregs[15] = frame;
 	sigregs[16] = handling.handler.handlerIp;
 	HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsSignal, &sigregs));
-	co_await linuxDiagMark(process, 'R');
 #else
 	(void)item;
 	(void)process;

@@ -67,11 +67,8 @@ async::result<bool> handlePendingSignalsFromObservation(Process *self) {
 
 		if (!active)
 			co_return true;
-		co_await linuxDiagMark(self, 'F');
 
 		auto handling = self->threadGroup()->signalContext()->acceptSignal(active, self);
-		if (handling.ignored)
-			co_await linuxDiagMark(self, 'I');
 		if constexpr (logSignals)
 			std::println("posix: signal={} handling={}", active->signalNumber, handling);
 
@@ -80,8 +77,6 @@ async::result<bool> handlePendingSignalsFromObservation(Process *self) {
 			continue;
 		}
 
-		if(self->isLinuxPersonality())
-			co_await linuxDiagMark(self, '0' + std::min(self->accessThreadPage()->globalSignalFlag, 9u));
 		if (self->checkOrRequestSignalRaise()) {
 			if constexpr (logSignals)
 				std::println("posix: raising signal");
@@ -97,8 +92,6 @@ async::result<bool> handlePendingSignalsFromObservation(Process *self) {
 			// checkOrRequestSignalRaise() has set globalSignalFlag to 2.
 			// The alert wakes a wait that already passed its globalSignalFlag check.
 			alertRemoteQueue(self);
-			if(self->isLinuxPersonality())
-				co_await linuxDiagMark(self, 'n');
 			self->delayedSignal = active;
 			self->delayedSignalHandling = handling;
 			co_return true;
@@ -731,12 +724,8 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 				// Signals raised during the upcall (kill to self, SIGPIPE) are
 				// processed here: serveSignals cannot interrupt a thread that is
 				// parked for resume.
-				if(nr == 62 || nr == 234)
-					co_await linuxDiagMark(self.get(), 'p');
 				if(!co_await handlePendingSignalsFromObservation(self.get()))
 					break;
-				if(nr == 62 || nr == 234)
-					co_await linuxDiagMark(self.get(), 'P');
 				HEL_CHECK(helResume(thread.getHandle()));
 			}else if(outcome.committed) {
 				// rt_sigreturn already restored the full register image.
