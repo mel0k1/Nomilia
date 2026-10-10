@@ -264,7 +264,7 @@ jobs:
           - name: Build Linux payloads
             run: |
                 set -x
-                ci/payloads/build-musl-busybox.sh
+                src/managarm/ci/payloads/build-musl-busybox.sh
           - name: Assemble the image
             run: |
                 set -x
