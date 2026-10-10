@@ -210,6 +210,19 @@ sockaddr совпадает с managarm-mlibc); sendmsg/recvmsg работают
 ошибки Hel клиенту не виден. Раньше это молча портило RDI (на простых тестах
 не проявлялось, для скомпилированного кода опасно).
 
+**Сброс SignalGuard-флага при exec.** `Process::exec` обнуляет
+`ThreadPage::globalSignalFlag`: у форк-клина, выросшего из нативного mlibc,
+флаг мог остаться 1 (SignalGuard активен) — тогда posix «паркует» все сигналы
+как delayedSignal, а клиента, который должен вызвать superSigRaise, у
+Linux-процесса больше нет. Симптом: сигналы не доставляются вообще.
+
+**Синхронный проход по отложенным сигналам.** serveSignals не может
+прервать поток, припаркованный на resume после upcall, — уведомление о
+сигнале, выданном во время upcall (kill в себя, SIGPIPE из sendMsg),
+терялось. observe-цикл теперь после записи результата делает неблокирующий
+проход `handlePendingSignalsFromObservation` перед helResume (зеркало
+нативного kill-пути).
+
 ## Ограничения v1, фаза 2, v3 и v4
 
 - **ioctl** покрывает только TCGETS/TCSETS/TIOCG(W)INSZ; FIONREAD/FIONBIO/TIOCGPGRP и прочие —
