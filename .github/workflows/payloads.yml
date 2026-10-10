@@ -1,0 +1,37 @@
+name: Linux payloads
+
+# Test payloads for the Nomilia linux-compat layer: musl (from source) plus
+# busybox static/dynamic and a minimal dynamic hello. Artifacts are consumed
+# manually when testing Linux binaries on Nomilia in QEMU.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ci/payloads/**'
+      - '.github/workflows/payloads.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: payloads-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-payloads:
+    name: musl + busybox (x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout Nomilia
+        uses: actions/checkout@v6
+      - name: Build payloads
+        run: ci/payloads/build-musl-busybox.sh
+      - name: Upload payloads
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-payloads-x86_64
+          path: payload/
+          if-no-files-found: error
